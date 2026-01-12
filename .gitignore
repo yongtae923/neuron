@@ -1,0 +1,39 @@
+# NumPy data files
+*.npy
+
+# Ansys data folders
+twin_cons_cathodicfirst_400us_100Hz_single10ms_Ex/
+twin_cons_cathodicfirst_400us_100Hz_single10ms_Ez/
+
+# Simulation output
+simulate_tES_output/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# Environment
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# IDE
+.vscode/
+.idea/
+cursor_ai_document/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
