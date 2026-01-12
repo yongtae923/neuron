@@ -805,9 +805,9 @@ for MODEL_TYPE in MODEL_TYPES:
         
         # 6. 파일로 저장
         if MODEL_TYPE == 'allen' and ALLEN_CELL_ID:
-            output_filename = f'allen_{ALLEN_CELL_ID}_neuron_response_all.png'
+            output_filename = f'allen_{ALLEN_CELL_ID}_neuron_response_all_v2.png'
         else:
-            output_filename = f'simple_neuron_response_all.png'
+            output_filename = f'simple_neuron_response_all_v2.png'
         output_path = os.path.join(OUTPUT_DIR, output_filename)
         plt.savefig(output_path, dpi=300, bbox_inches='tight')
         plt.close()  # 메모리 절약을 위해 figure 닫기
