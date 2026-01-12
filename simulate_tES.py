@@ -3,10 +3,13 @@ import numpy as np
 import os
 from neuron import h
 from neuron.units import um, ms, mV
-from simple_pyramidal_model import SimplePyramidal
 import math
 
 h.load_file("stdrun.hoc")
+
+# --- 0. 모델 선택 ---
+# 'simple' 또는 'allen' 중 선택
+MODEL_TYPE = 'allen'  # 'simple' 또는 'allen'
 
 # --- 1. 파일 경로 및 시뮬레이션 상수 ---
 # 스크립트가 있는 디렉토리를 기준으로 경로 설정
@@ -158,6 +161,23 @@ def set_extracellular_field():
 # --- 5. 뉴런 생성 및 배치 ---
 
 print("\n--- 2. 뉴런 모델 생성 및 배치 ---")
+print(f"사용 모델: {MODEL_TYPE}")
+
+# 모델 import
+if MODEL_TYPE == 'simple':
+    from simple_pyramidal_model import SimplePyramidal
+    CELL_ID = None
+elif MODEL_TYPE == 'allen':
+    from allen_neuron_model import AllenNeuronModel, ALLEN_DATA_DIR
+    import re
+    # 폴더 이름에서 cell ID 추출 (예: allen_neuron_321923685 -> 321923685)
+    folder_name = os.path.basename(ALLEN_DATA_DIR)
+    match = re.search(r'(\d+)$', folder_name)
+    CELL_ID = match.group(1) if match else None
+    if CELL_ID:
+        print(f"Cell ID: {CELL_ID}")
+else:
+    raise ValueError(f"잘못된 모델 타입: {MODEL_TYPE}. 'simple' 또는 'allen'을 사용하세요.")
 
 # 3개 뉴런의 중심 위치 (um)
 N_POSITIONS = [
@@ -169,7 +189,10 @@ N_POSITIONS = [
 # 뉴런 인스턴스 생성
 neurons = []
 for i, (x, y, z) in enumerate(N_POSITIONS):
-    neuron = SimplePyramidal(x=x, y=y, z_center=z)
+    if MODEL_TYPE == 'simple':
+        neuron = SimplePyramidal(x=x, y=y, z_center=z)
+    elif MODEL_TYPE == 'allen':
+        neuron = AllenNeuronModel(x=x, y=y, z=z)
     neurons.append(neuron)
     print(f"Neuron {i+1} created at (x={x:.1f}, y={y:.1f}, z={z:.1f}) um")
 
@@ -255,36 +278,45 @@ try:
     print(f"\n--- 5. 결과 플롯 생성 및 저장 ---")
     print(f"결과 저장 디렉토리: {OUTPUT_DIR}")
     
+    # 1. 하나의 Figure에 3개의 서브플롯 생성 (세로로 배치)
+    fig, axes = plt.subplots(3, 1, figsize=(12, 10))
+    fig.suptitle(f'Neuron Response to Extracellular Field (40 Cycles) - {MODEL_TYPE.upper()}', fontsize=14, fontweight='bold')
+    
     for i in range(3):
-        # 1. 새로운 Figure를 생성합니다.
-        plt.figure(figsize=(12, 4))
+        ax = axes[i]
         
         # 2. i번째 뉴런의 Vm 데이터를 플롯합니다.
         neuron_label = f'Neuron {i+1} (X={N_POSITIONS[i][0]:.0f} um)'
         
         # NumPy 배열로 변환하여 플롯합니다.
-        plt.plot(t_vec.as_numpy(), Vm_vecs[i].as_numpy(), label=neuron_label, linewidth=1.5)
+        ax.plot(t_vec.as_numpy(), Vm_vecs[i].as_numpy(), label=neuron_label, linewidth=1.5)
         
         # 3. 플롯 제목 및 레이블 설정
-        plt.xlabel('Time (ms)')
-        plt.ylabel('Soma Membrane Potential (mV)')
-        plt.title(f'Response of {neuron_label} to Extracellular Field (40 Cycles)')
+        ax.set_xlabel('Time (ms)')
+        ax.set_ylabel('Soma Membrane Potential (mV)')
+        ax.set_title(f'Response of {neuron_label}')
         
         # 4. 기준선(-65mV) 및 그리드 추가
-        plt.axhline(-65, color='red', linestyle='--', linewidth=0.8, label='Resting Potential')
-        plt.legend()
-        plt.grid(True)
+        ax.axhline(-65, color='red', linestyle='--', linewidth=0.8, label='Resting Potential')
+        ax.legend()
+        ax.grid(True)
+    
+    # 5. 서브플롯 간 간격 조정
+    plt.tight_layout()
+    
+    # 6. 파일로 저장
+    if MODEL_TYPE == 'allen' and CELL_ID:
+        output_filename = f'allen_{CELL_ID}_neuron_response_all.png'
+    else:
+        output_filename = f'simple_neuron_response_all.png'
+    output_path = os.path.join(OUTPUT_DIR, output_filename)
+    plt.savefig(output_path, dpi=300, bbox_inches='tight')
+    print(f"   ✅ 저장됨: {output_filename}")
+    
+    # 7. 화면에도 표시 (선택 사항)
+    # plt.show(block=False)
 
-        # 5. 파일로 저장
-        output_filename = f'neuron_{i+1}_response.png'
-        output_path = os.path.join(OUTPUT_DIR, output_filename)
-        plt.savefig(output_path, dpi=300, bbox_inches='tight')
-        print(f"   ✅ 저장됨: {output_filename}")
-        
-        # 6. 화면에도 표시 (선택 사항)
-        # plt.show(block=False)
-
-    print(f"\n✅ 3개의 개별 플롯이 '{OUTPUT_DIR}' 디렉토리에 저장되었습니다.")
+    print(f"\n✅ 서브플롯이 '{OUTPUT_DIR}' 디렉토리에 저장되었습니다.")
 
 except ImportError:
     print("\n경고: Matplotlib이 설치되지 않았습니다. 결과를 플롯하려면 'pip install matplotlib'을 실행하세요.")
