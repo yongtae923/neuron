@@ -3,10 +3,84 @@ from neuron import h
 from neuron.units import um, ms, mV
 import os
 import numpy as np
+import re
 
 # --- 1. 파일 경로 설정 ---
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-ALLEN_DATA_DIR = os.path.join(SCRIPT_DIR, 'allen_neuron_321923685')
+
+# 기본 cell ID (하위 호환성을 위해 유지)
+_DEFAULT_CELL_ID = '321923685'
+
+def get_allen_cell_id():
+    """
+    현재 설정된 Allen 모델의 cell ID를 반환합니다.
+    
+    :return: Cell ID (문자열) 또는 None
+    """
+    if ALLEN_DATA_DIR:
+        folder_name = os.path.basename(ALLEN_DATA_DIR)
+        match = re.search(r'(\d+)$', folder_name)
+        if match:
+            return match.group(1)
+    return None
+
+def set_allen_cell_id(cell_id):
+    """
+    Allen 모델의 cell ID를 설정합니다.
+    이 함수를 호출하면 이후 생성되는 AllenNeuronModel이 해당 cell ID의 데이터를 사용합니다.
+    
+    :param cell_id: Cell ID (문자열 또는 정수, 예: '321923685' 또는 321923685)
+    :raises FileNotFoundError: 지정된 cell ID의 데이터 폴더나 필수 파일을 찾을 수 없을 때
+    """
+    global ALLEN_DATA_DIR, SWC_FILE, NWB_FILE, XML_FILE
+    
+    cell_id_str = str(cell_id)
+    ALLEN_DATA_DIR = os.path.join(SCRIPT_DIR, f'allen_neuron_{cell_id_str}')
+    
+    if not os.path.exists(ALLEN_DATA_DIR):
+        raise FileNotFoundError(f"Allen 데이터 폴더를 찾을 수 없습니다: {ALLEN_DATA_DIR}")
+    
+    # SWC 파일 자동 찾기
+    swc_files = [f for f in os.listdir(ALLEN_DATA_DIR) if f.endswith('.swc')]
+    if not swc_files:
+        raise FileNotFoundError(f"SWC 파일을 찾을 수 없습니다: {ALLEN_DATA_DIR}")
+    # reconstruction.swc가 있으면 우선 사용, 없으면 첫 번째 .swc 파일 사용
+    if 'reconstruction.swc' in swc_files:
+        SWC_FILE = os.path.join(ALLEN_DATA_DIR, 'reconstruction.swc')
+    else:
+        SWC_FILE = os.path.join(ALLEN_DATA_DIR, swc_files[0])
+    
+    # XML 파일 자동 찾기 (여러 가능한 이름 확인)
+    xml_candidates = ['ephys_query.xml', 'electrophysiology_query.xml', 'morphology_query.xml']
+    XML_FILE = None
+    for xml_name in xml_candidates:
+        xml_path = os.path.join(ALLEN_DATA_DIR, xml_name)
+        if os.path.exists(xml_path):
+            XML_FILE = xml_path
+            break
+    
+    # NWB 파일 자동 찾기 (선택사항)
+    nwb_files = [f for f in os.listdir(ALLEN_DATA_DIR) if f.endswith('.nwb')]
+    if nwb_files:
+        # cell_id로 시작하는 nwb 파일 우선 사용
+        nwb_with_id = [f for f in nwb_files if f.startswith(cell_id_str)]
+        if nwb_with_id:
+            NWB_FILE = os.path.join(ALLEN_DATA_DIR, nwb_with_id[0])
+        else:
+            NWB_FILE = os.path.join(ALLEN_DATA_DIR, nwb_files[0])
+    else:
+        NWB_FILE = None
+    
+    print(f"✅ Allen 데이터 설정 완료: Cell ID = {cell_id_str}")
+    print(f"   데이터 폴더: {ALLEN_DATA_DIR}")
+    print(f"   SWC 파일: {os.path.basename(SWC_FILE)}")
+    if XML_FILE:
+        print(f"   XML 파일: {os.path.basename(XML_FILE)}")
+    if NWB_FILE:
+        print(f"   NWB 파일: {os.path.basename(NWB_FILE)}")
+
+# 초기화: 기본 cell ID로 설정
+ALLEN_DATA_DIR = os.path.join(SCRIPT_DIR, f'allen_neuron_{_DEFAULT_CELL_ID}')
 SWC_FILE = os.path.join(ALLEN_DATA_DIR, 'Nr5a1-Cre_Ai14-172512.06.02.01_491120144_m.swc')
 NWB_FILE = os.path.join(ALLEN_DATA_DIR, '321923683_ephys.nwb')
 XML_FILE = os.path.join(ALLEN_DATA_DIR, 'ephys_query.xml')
@@ -210,14 +284,81 @@ def parse_swc(swc_file):
 
 # --- 4. Allen Neuron 모델 클래스 ---
 class AllenNeuronModel:
-    def __init__(self, x=0, y=0, z=0, swc_file=None, nwb_file=None, xml_file=None):
+    def __init__(self, x=0, y=0, z=0, swc_file=None, nwb_file=None, xml_file=None, cell_id=None, data_dir=None):
         """
         Allen Brain Atlas에서 다운로드한 실제 뉴런 모델을 생성합니다.
         :param x, y, z: 세포의 원점 위치 (um) - SWC 좌표에 더해짐
         :param swc_file: SWC 파일 경로 (None이면 기본 경로 사용)
         :param nwb_file: NWB 파일 경로 (None이면 기본 경로 사용)
         :param xml_file: XML 파일 경로 (query.xml, 선택사항)
+        :param cell_id: Cell ID (문자열 또는 정수). 지정하면 해당 cell ID의 데이터를 사용합니다.
+        :param data_dir: 데이터 폴더 경로 직접 지정 (cell_id보다 우선순위 높음)
         """
+        # data_dir이 지정되면 직접 사용
+        if data_dir:
+            if not os.path.exists(data_dir):
+                raise FileNotFoundError(f"데이터 폴더를 찾을 수 없습니다: {data_dir}")
+            
+            # data_dir에서 파일 찾기
+            swc_files = [f for f in os.listdir(data_dir) if f.endswith('.swc')]
+            if not swc_files:
+                raise FileNotFoundError(f"SWC 파일을 찾을 수 없습니다: {data_dir}")
+            if 'reconstruction.swc' in swc_files:
+                swc_file = swc_file or os.path.join(data_dir, 'reconstruction.swc')
+            else:
+                swc_file = swc_file or os.path.join(data_dir, swc_files[0])
+            
+            xml_candidates = ['ephys_query.xml', 'electrophysiology_query.xml', 'morphology_query.xml']
+            for xml_name in xml_candidates:
+                xml_path = os.path.join(data_dir, xml_name)
+                if os.path.exists(xml_path):
+                    xml_file = xml_file or xml_path
+                    break
+            
+            nwb_files = [f for f in os.listdir(data_dir) if f.endswith('.nwb')]
+            if nwb_files:
+                nwb_file = nwb_file or os.path.join(data_dir, nwb_files[0])
+        
+        # cell_id가 지정되면 해당 폴더의 파일을 직접 찾기 (전역 설정 변경 안 함)
+        elif cell_id:
+            cell_id_str = str(cell_id)
+            data_dir = os.path.join(SCRIPT_DIR, f'allen_neuron_{cell_id_str}')
+            
+            print(f"   📁 실제 사용 데이터 폴더: {data_dir}")
+            if not os.path.exists(data_dir):
+                raise FileNotFoundError(f"Allen 데이터 폴더를 찾을 수 없습니다: {data_dir}")
+            
+            # SWC 파일 자동 찾기
+            swc_files = [f for f in os.listdir(data_dir) if f.endswith('.swc')]
+            if not swc_files:
+                raise FileNotFoundError(f"SWC 파일을 찾을 수 없습니다: {data_dir}")
+            if 'reconstruction.swc' in swc_files:
+                swc_file = swc_file or os.path.join(data_dir, 'reconstruction.swc')
+            else:
+                swc_file = swc_file or os.path.join(data_dir, swc_files[0])
+            print(f"   📄 실제 사용 SWC 파일: {os.path.basename(swc_file)}")
+            
+            # XML 파일 자동 찾기
+            xml_candidates = ['ephys_query.xml', 'electrophysiology_query.xml', 'morphology_query.xml']
+            for xml_name in xml_candidates:
+                xml_path = os.path.join(data_dir, xml_name)
+                if os.path.exists(xml_path):
+                    xml_file = xml_file or xml_path
+                    break
+            if xml_file:
+                print(f"   📄 실제 사용 XML 파일: {os.path.basename(xml_file)}")
+            
+            # NWB 파일 자동 찾기 (선택사항)
+            nwb_files = [f for f in os.listdir(data_dir) if f.endswith('.nwb')]
+            if nwb_files:
+                nwb_with_id = [f for f in nwb_files if f.startswith(cell_id_str)]
+                if nwb_with_id:
+                    nwb_file = nwb_file or os.path.join(data_dir, nwb_with_id[0])
+                else:
+                    nwb_file = nwb_file or os.path.join(data_dir, nwb_files[0])
+                print(f"   📄 실제 사용 NWB 파일: {os.path.basename(nwb_file)}")
+        
+        # 파일 경로 설정 (파라미터로 지정된 것이 우선)
         if swc_file is None:
             swc_file = SWC_FILE
         if nwb_file is None:

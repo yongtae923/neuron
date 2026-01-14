@@ -32,6 +32,11 @@ N_SPATIAL_POINTS = None # 로드 시 결정될 공간 그리드 지점 수
 # - V/mm로 export된 경우: 1000.0 (V/mm → V/m)
 E_UNIT_SCALE = 1000.0  # V/mm → V/m 변환 (FEM 데이터가 V/mm 단위)
 
+# E-field 단위 변환 계수 (V/m → mV)
+# - E-field는 V/m 단위이므로 mV 단위로 변환해야 NEURON과 일치
+# - 1 V/m = 1e-3 mV/um (거리는 이미 um 단위로 계산됨)
+E_factor = 1e-3  # V/m → mV 변환 계수
+
 TARGET_E_PEAK = 10.0  # V/m 목표 피크 (E-field 정규화용) - 검증용 10배 증가
 # 검증용: 필드 크기를 10배 올리려면 TARGET_E_PEAK = 10.0으로 변경
 
@@ -292,7 +297,7 @@ def compute_phi_sections(neuron, morph_cache, topo, current_time_ms):
             spidx = mid_spidx[i]
             Ex, Ey, Ez = get_E_at(spidx, current_time_ms)
             dx, dy, dz = dl[i]
-            dphi = -(Ex * dx + Ey * dy + Ez * dz) * 1e-3  # mV
+            dphi = -(Ex * dx + Ey * dy + Ez * dz) * E_factor  # mV
             phis.append(phis[-1] + dphi)
 
         phi_sec[sec] = (arc, phis)
@@ -401,7 +406,7 @@ def set_extracellular_field():
                     seg_x, seg_y, seg_z = xyz_at_seg(sec, seg.x)
                     
                     # Extracellular potential 설정 (절대 전위)
-                    phi_mV = -(E_x * seg_x + E_y * seg_y + E_z * seg_z) * 1e-3  # mV
+                    phi_mV = -(E_x * seg_x + E_y * seg_y + E_z * seg_z) * E_factor  # mV
                     seg.e_extracellular = phi_mV
                 
     return 0 # h.fadvance()를 위한 반환값 (필수)
@@ -741,6 +746,8 @@ for MODEL_TYPE in MODEL_TYPES:
     
     # --- 6.5. 결과 출력 ---
     try:
+        import matplotlib
+        matplotlib.use('Agg')  # Non-interactive backend for WSL/headless environments
         import matplotlib.pyplot as plt
         
         print(f"\n--- 5. 결과 플롯 생성 및 저장 ---")

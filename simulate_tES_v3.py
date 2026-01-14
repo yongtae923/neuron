@@ -11,7 +11,7 @@ h.load_file("stdrun.hoc")
 
 # --- 0. 모델 선택 및 E-field 적용 방식 ---
 # 'simple' 또는 'allen' 중 선택
-MODEL_TYPE = 'allen'  # 'simple' 또는 'allen'
+MODEL_TYPE = 'simple'  # 'simple' 또는 'allen'
 
 # E-field 적용 방식: 'simple' (phi = -(E·r)) 또는 'integrated' (pt3d 기반 적분)
 E_FIELD_METHOD = 'integrated'  # 'simple' 또는 'integrated'
@@ -20,7 +20,7 @@ E_FIELD_METHOD = 'integrated'  # 'simple' 또는 'integrated'
 ALLEN_CELL_ID = '486239338'  # 사용할 cell ID를 여기에 입력
 
 # 플롯 타입 선택: 'all' (전체 40 cycles), 'single' (첫 1ms), 'both' (둘 다)
-PLOT_TYPE = 'single'  # 'all', 'single', 또는 'both'
+PLOT_TYPE = 'all'  # 'all', 'single', 또는 'both'
 
 # --- 1. 파일 경로 및 시뮬레이션 상수 ---
 # 스크립트가 있는 디렉토리를 기준으로 경로 설정
@@ -893,9 +893,9 @@ try:
             
             # 6. 파일로 저장
             if MODEL_TYPE == 'allen' and ALLEN_CELL_ID:
-                output_filename = f'allen_{ALLEN_CELL_ID}_neuron_response_all.png'
+                output_filename = f'allen_{ALLEN_CELL_ID}_neuron_response_all_v3.png'
             else:
-                output_filename = f'simple_neuron_response_all.png'
+                output_filename = f'simple_neuron_response_all_v3.png'
             output_path = os.path.join(OUTPUT_DIR, output_filename)
             plt.savefig(output_path, dpi=300, bbox_inches='tight')
             plt.close()  # 메모리 절약을 위해 figure 닫기
@@ -997,9 +997,9 @@ try:
                 
                 # 6. 파일로 저장
                 if MODEL_TYPE == 'allen' and ALLEN_CELL_ID:
-                    output_filename_single = f'allen_{ALLEN_CELL_ID}_neuron_response_single_cycle.png'
+                    output_filename_single = f'allen_{ALLEN_CELL_ID}_neuron_response_single_cycle_v3.png'
                 else:
-                    output_filename_single = f'simple_neuron_response_single_cycle.png'
+                    output_filename_single = f'simple_neuron_response_single_cycle_v3.png'
                 output_path_single = os.path.join(OUTPUT_DIR, output_filename_single)
                 plt.savefig(output_path_single, dpi=300, bbox_inches='tight')
                 plt.close()  # 메모리 절약을 위해 figure 닫기
