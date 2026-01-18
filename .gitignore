@@ -11,6 +11,7 @@ allen_neuron_486239338/
 
 # Simulation output
 simulate_tES_output/
+visualize_efield_output/
 
 # Python cache
 __pycache__/
