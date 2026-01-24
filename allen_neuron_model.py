@@ -51,7 +51,7 @@ def set_allen_cell_id(cell_id):
         SWC_FILE = os.path.join(ALLEN_DATA_DIR, swc_files[0])
     
     # XML 파일 자동 찾기 (여러 가능한 이름 확인)
-    xml_candidates = ['ephys_query.xml', 'electrophysiology_query.xml', 'morphology_query.xml']
+    xml_candidates = ['ephys_query.xml', 'electrophysiology_query.xml', 'morph_query.xml', 'morphology_query.xml']
     XML_FILE = None
     for xml_name in xml_candidates:
         xml_path = os.path.join(ALLEN_DATA_DIR, xml_name)
@@ -308,7 +308,7 @@ class AllenNeuronModel:
             else:
                 swc_file = swc_file or os.path.join(data_dir, swc_files[0])
             
-            xml_candidates = ['ephys_query.xml', 'electrophysiology_query.xml', 'morphology_query.xml']
+            xml_candidates = ['ephys_query.xml', 'electrophysiology_query.xml', 'morph_query.xml', 'morphology_query.xml']
             for xml_name in xml_candidates:
                 xml_path = os.path.join(data_dir, xml_name)
                 if os.path.exists(xml_path):
@@ -339,7 +339,7 @@ class AllenNeuronModel:
             print(f"   📄 실제 사용 SWC 파일: {os.path.basename(swc_file)}")
             
             # XML 파일 자동 찾기
-            xml_candidates = ['ephys_query.xml', 'electrophysiology_query.xml', 'morphology_query.xml']
+            xml_candidates = ['ephys_query.xml', 'electrophysiology_query.xml', 'morph_query.xml', 'morphology_query.xml']
             for xml_name in xml_candidates:
                 xml_path = os.path.join(data_dir, xml_name)
                 if os.path.exists(xml_path):

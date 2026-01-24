@@ -68,6 +68,149 @@ from mpl_toolkits.mplot3d import Axes3D
 
 DEFAULT_TIME_STEP_US = 50.0
 
+# SimplePyramidal 뉴런 파라미터
+SOMA_DIAMETER = 30.0  # um
+SOMA_LENGTH = 30.0    # um
+AXON_LENGTH = 1000.0  # um
+
+# 뉴런 위치 (simulate_tES.py의 N_POSITIONS와 동일)
+NEURON_POSITIONS = [
+    (-90.0, 42.0, 561.0),  # Neuron 1 (x, y, z in um)
+    (0.0, 42.0, 561.0),    # Neuron 2
+    (90.0, 42.0, 561.0)    # Neuron 3
+]
+
+
+def get_neuron_geometry():
+    """
+    SimplePyramidal 뉴런의 기하학적 정보를 반환합니다.
+    Returns:
+        list: 각 뉴런의 (soma_x, soma_z_start, soma_z_end, axon_x, axon_z_start, axon_z_end) 정보
+    """
+    neuron_geoms = []
+    for x, y, z_center in NEURON_POSITIONS:
+        soma_z_start = z_center - SOMA_LENGTH / 2.0
+        soma_z_end = z_center + SOMA_LENGTH / 2.0
+        axon_z_start = z_center - AXON_LENGTH / 2.0
+        axon_z_end = z_center + AXON_LENGTH / 2.0
+        neuron_geoms.append({
+            'x': x,
+            'y': y,
+            'z_center': z_center,
+            'soma_z_start': soma_z_start,
+            'soma_z_end': soma_z_end,
+            'axon_z_start': axon_z_start,
+            'axon_z_end': axon_z_end,
+            'soma_radius': SOMA_DIAMETER / 2.0
+        })
+    return neuron_geoms
+
+
+def plot_neurons_on_3d(ax, units="um", time_value=-1.0):
+    """
+    3D 플롯에 뉴런을 그립니다 (x-z 평면, time=time_value 위치).
+    
+    Args:
+        ax: matplotlib 3D axes
+        units: 좌표 단위 ("um" or "m")
+        time_value: 시간축 값 (plot_time_3d에서 사용)
+    """
+    neuron_geoms = get_neuron_geometry()
+    
+    # 단위 변환
+    scale = 1.0 if units == "um" else 1e6
+    
+    for i, geom in enumerate(neuron_geoms):
+        x = geom['x'] / scale if units == "m" else geom['x']
+        z_center = geom['z_center'] / scale if units == "m" else geom['z_center']
+        soma_z_start = geom['soma_z_start'] / scale if units == "m" else geom['soma_z_start']
+        soma_z_end = geom['soma_z_end'] / scale if units == "m" else geom['soma_z_end']
+        axon_z_start = geom['axon_z_start'] / scale if units == "m" else geom['axon_z_start']
+        axon_z_end = geom['axon_z_end'] / scale if units == "m" else geom['axon_z_end']
+        soma_radius = geom['soma_radius'] / scale if units == "m" else geom['soma_radius']
+        
+        # Soma를 원으로 그리기 (x-z 평면에서)
+        # 원을 그리기 위해 각도를 사용
+        theta = np.linspace(0, 2 * np.pi, 50)
+        soma_x_circle = x + soma_radius * np.cos(theta)
+        soma_z_circle = z_center + soma_radius * np.sin(theta)
+        time_circle = np.full_like(theta, time_value)
+        
+        # 3D 플롯에서 원 그리기 (x-z 평면, y=time_value)
+        # 뉴런이 더 잘 보이도록 선 두껍게, 완전 불투명, zorder 높게 설정
+        ax.plot(soma_x_circle, time_circle, soma_z_circle, 'r-', linewidth=2, alpha=1.0, zorder=1000)
+        # Soma 중심에 점 추가로 더 눈에 띄게
+        ax.scatter([x], [time_value], [z_center], c='red', s=100, alpha=1.0, zorder=1001)
+        
+        # Axon을 선으로 그리기 (x-z 평면에서)
+        axon_x_line = np.array([x, x])
+        axon_z_line = np.array([axon_z_start, axon_z_end])
+        time_line = np.array([time_value, time_value])
+        
+        ax.plot(axon_x_line, time_line, axon_z_line, 'r-', linewidth=3, alpha=1.0, zorder=1000)
+
+
+def plot_neurons_on_2d(ax, projection, units="um"):
+    """
+    2D 플롯에 뉴런을 그립니다.
+    
+    Args:
+        ax: matplotlib axes
+        projection: "xy", "xz", "yz"
+        units: 좌표 단위 ("um" or "m")
+    """
+    neuron_geoms = get_neuron_geometry()
+    
+    # 단위 변환
+    scale = 1.0 if units == "um" else 1e6
+    
+    axis_map = {"xy": (0, 1), "xz": (0, 2), "yz": (1, 2)}
+    a0, a1 = axis_map[projection]
+    
+    for i, geom in enumerate(neuron_geoms):
+        x = geom['x'] / scale if units == "m" else geom['x']
+        y = geom['y'] / scale if units == "m" else geom['y']
+        z_center = geom['z_center'] / scale if units == "m" else geom['z_center']
+        soma_z_start = geom['soma_z_start'] / scale if units == "m" else geom['soma_z_start']
+        soma_z_end = geom['soma_z_end'] / scale if units == "m" else geom['soma_z_end']
+        axon_z_start = geom['axon_z_start'] / scale if units == "m" else geom['axon_z_start']
+        axon_z_end = geom['axon_z_end'] / scale if units == "m" else geom['axon_z_end']
+        soma_radius = geom['soma_radius'] / scale if units == "m" else geom['soma_radius']
+        
+        if projection == "xz":
+            # x-z 평면: soma는 원, axon은 선
+            # Soma 원 - 뉴런이 더 잘 보이도록 선 두껍게, 완전 불투명, zorder 높게 설정
+            theta = np.linspace(0, 2 * np.pi, 50)
+            soma_x_circle = x + soma_radius * np.cos(theta)
+            soma_z_circle = z_center + soma_radius * np.sin(theta)
+            ax.plot(soma_x_circle, soma_z_circle, 'r-', linewidth=2, alpha=1.0, zorder=1000)
+            # Soma 중심에 점 추가
+            ax.scatter([x], [z_center], c='red', s=100, alpha=1.0, zorder=1001)
+            
+            # Axon 선
+            ax.plot([x, x], [axon_z_start, axon_z_end], 'r-', linewidth=3, alpha=1.0, zorder=1000)
+        elif projection == "xy":
+            # x-y 평면: soma는 원, axon은 점 (z 방향이므로)
+            theta = np.linspace(0, 2 * np.pi, 50)
+            soma_x_circle = x + soma_radius * np.cos(theta)
+            soma_y_circle = y + soma_radius * np.sin(theta)
+            ax.plot(soma_x_circle, soma_y_circle, 'r-', linewidth=4, alpha=1.0, zorder=1000)
+            # Soma 중심에 점 추가
+            ax.scatter([x], [y], c='red', s=100, alpha=1.0, zorder=1001)
+            # Axon은 z 방향이므로 x-y 평면에서는 점으로만 표시
+            ax.plot(x, y, 'ro', markersize=10, alpha=1.0, zorder=1001)
+        elif projection == "yz":
+            # y-z 평면: soma는 원, axon은 선
+            theta = np.linspace(0, 2 * np.pi, 50)
+            soma_y_circle = y + soma_radius * np.cos(theta)
+            soma_z_circle = z_center + soma_radius * np.sin(theta)
+            ax.plot(soma_y_circle, soma_z_circle, 'r-', linewidth=4, alpha=1.0, zorder=1000)
+            # Soma 중심에 점 추가
+            ax.scatter([y], [z_center], c='red', s=100, alpha=1.0, zorder=1001)
+            
+            # Axon 선
+            ax.plot([y, y], [axon_z_start, axon_z_end], 'r-', linewidth=3, alpha=1.0, zorder=1000)
+
 
 def load_data(values_path, coords_path):
     print("📂 데이터 로딩 중...")
@@ -114,7 +257,7 @@ def downsample(coords, values, step):
     return coords[::step], values[::step]
 
 
-def plot_3d(coords, values, units, title, output_path=None, auto_save=True, efield_unit="mV/m"):
+def plot_3d(coords, values, units, title, output_path=None, auto_save=True, efield_unit="mV/m", show_neurons=False):
     print("🎨 플롯 생성 중...")
     with tqdm(total=6, desc="플롯 렌더링", unit="step", leave=False) as pbar:
         fig = plt.figure()
@@ -181,6 +324,43 @@ def plot_3d(coords, values, units, title, output_path=None, auto_save=True, efie
         fig.colorbar(sc, ax=ax, shrink=0.6, label=f"E-field ({efield_unit})")
         pbar.update(1)
         ax.set_title(title, fontsize=14, fontweight='bold', pad=15)
+        
+        # 뉴런 그리기 (y=42um 위치에 x-z 평면, time=0으로 간주)
+        if show_neurons:
+            # 3D 플롯에서는 y 축이 있으므로, y=42um 위치에 x-z 평면으로 그리기
+            # 하지만 plot_3d는 특정 시간 지점이므로 time 축이 없음
+            # 대신 y=42um 위치에 x-z 평면으로 그리기
+            neuron_geoms = get_neuron_geometry()
+            scale = 1.0 if units == "um" else 1e6
+            
+            for i, geom in enumerate(neuron_geoms):
+                x = geom['x'] / scale if units == "m" else geom['x']
+                y = geom['y'] / scale if units == "m" else geom['y']
+                z_center = geom['z_center'] / scale if units == "m" else geom['z_center']
+                soma_z_start = geom['soma_z_start'] / scale if units == "m" else geom['soma_z_start']
+                soma_z_end = geom['soma_z_end'] / scale if units == "m" else geom['soma_z_end']
+                axon_z_start = geom['axon_z_start'] / scale if units == "m" else geom['axon_z_start']
+                axon_z_end = geom['axon_z_end'] / scale if units == "m" else geom['axon_z_end']
+                soma_radius = geom['soma_radius'] / scale if units == "m" else geom['soma_radius']
+                
+                # Soma를 원으로 그리기 (x-z 평면에서, y 고정)
+                theta = np.linspace(0, 2 * np.pi, 50)
+                soma_x_circle = x + soma_radius * np.cos(theta)
+                soma_z_circle = z_center + soma_radius * np.sin(theta)
+                y_circle = np.full_like(theta, y)
+                
+                # 뉴런이 더 잘 보이도록 선 두껍게, 완전 불투명, zorder 높게 설정
+                ax.plot(soma_x_circle, y_circle, soma_z_circle, 'r-', linewidth=2, alpha=1.0, zorder=1000)
+                # Soma 중심에 점 추가로 더 눈에 띄게
+                ax.scatter([x], [y], [z_center], c='red', s=100, alpha=1.0, zorder=1001)
+                
+                # Axon을 선으로 그리기 (x-z 평면에서, y 고정)
+                axon_x_line = np.array([x, x])
+                axon_z_line = np.array([axon_z_start, axon_z_end])
+                y_line = np.array([y, y])
+                
+                ax.plot(axon_x_line, y_line, axon_z_line, 'r-', linewidth=3, alpha=1.0, zorder=1000)
+        
         plt.tight_layout()
         pbar.update(1)
     
@@ -207,7 +387,125 @@ def plot_3d(coords, values, units, title, output_path=None, auto_save=True, efie
     plt.close()
 
 
-def plot_2d(coords, values, units, projection, title, output_path=None, efield_unit="mV/m"):
+def plot_2d_quiver(coords, ex_values, ez_values, units, title, output_path=None, efield_unit="mV/m", 
+                   y_slice_value=42.0, y_slice_thickness=1.0, downsample_step=5):
+    """
+    E-field 방향을 화살표와 색깔로 표현한 2D quiver 플롯 (x-z 평면)
+    
+    Args:
+        coords: 좌표 배열 (N, 3) [x, y, z]
+        ex_values: Ex 성분 값 (N,)
+        ez_values: Ez 성분 값 (N,)
+        units: 좌표 단위 ("um" or "m")
+        title: 플롯 제목
+        output_path: 출력 파일 경로
+        efield_unit: E-field 단위
+        y_slice_value: y 슬라이스 중심값 (기본: 42.0 um)
+        y_slice_thickness: y 슬라이스 두께 (기본: 1.0 um)
+        downsample_step: 다운샘플링 스텝 (기본: 5, 화살표가 너무 많으면 늘리기)
+    """
+    print("🎨 Quiver 플롯 생성 중...")
+    
+    # y 슬라이스 필터링
+    half = y_slice_thickness / 2.0
+    mask_y = np.abs(coords[:, 1] - y_slice_value) <= half
+    coords_filtered = coords[mask_y]
+    ex_filtered = ex_values[mask_y]
+    ez_filtered = ez_values[mask_y]
+    
+    print(f"📍 Y 슬라이스 필터링: y = {y_slice_value:.1f} ± {half:.1f} {units} (포인트 수: {len(coords_filtered)})")
+    
+    # 다운샘플링
+    if downsample_step > 1:
+        coords_filtered = coords_filtered[::downsample_step]
+        ex_filtered = ex_filtered[::downsample_step]
+        ez_filtered = ez_filtered[::downsample_step]
+        print(f"📉 다운샘플링 적용: {downsample_step}배 (포인트 수: {len(coords_filtered)})")
+    
+    # x-z 좌표 추출
+    x_coords = coords_filtered[:, 0]
+    z_coords = coords_filtered[:, 2]
+    
+    # 단위 변환 (V/m → 선택한 단위)
+    unit_scale = {"V/m": 1.0, "mV/m": 1000.0, "μV/m": 1e6, "V/mm": 0.001}.get(efield_unit, 1.0)
+    ex_plot = ex_filtered * unit_scale
+    ez_plot = ez_filtered * unit_scale
+    
+    # 전기장 크기 계산 (색깔용)
+    magnitude = np.sqrt(ex_plot**2 + ez_plot**2)
+    
+    # threshold 설정 (너무 작은 값은 제외)
+    threshold_vm = 0.000001  # V/m 기준
+    threshold = threshold_vm * unit_scale
+    mask_above_threshold = magnitude >= threshold
+    
+    if np.sum(mask_above_threshold) == 0:
+        print("⚠️  경고: threshold 이상의 전기장이 없습니다. threshold를 낮추세요.")
+        return
+    
+    x_coords = x_coords[mask_above_threshold]
+    z_coords = z_coords[mask_above_threshold]
+    ex_plot = ex_plot[mask_above_threshold]
+    ez_plot = ez_plot[mask_above_threshold]
+    magnitude = magnitude[mask_above_threshold]
+    
+    print(f"📊 플롯할 포인트 수: {len(x_coords)}")
+    
+    # 플롯 생성
+    with tqdm(total=6, desc="Quiver 플롯 렌더링", unit="step", leave=False) as pbar:
+        fig, ax = plt.subplots(figsize=(12, 10))
+        pbar.update(1)
+        
+        # 화살표 길이 정규화 (너무 길거나 짧지 않게)
+        max_magnitude = np.max(magnitude) if len(magnitude) > 0 else 1.0
+        # 화살표 길이를 적절하게 조정 (최대 길이를 데이터 범위의 일정 비율로)
+        x_range = np.max(x_coords) - np.min(x_coords) if len(x_coords) > 1 else 1.0
+        z_range = np.max(z_coords) - np.min(z_coords) if len(z_coords) > 1 else 1.0
+        max_range = max(x_range, z_range)
+        
+        # 화살표 스케일 조정 (화살표가 너무 길지 않게)
+        arrow_scale = max_range / (max_magnitude * 20) if max_magnitude > 0 else 1.0
+        
+        # Quiver 플롯 (화살표)
+        quiver = ax.quiver(x_coords, z_coords, ex_plot, ez_plot, magnitude,
+                          cmap='viridis', scale=1.0/arrow_scale, scale_units='xy',
+                          angles='xy', width=0.003, alpha=0.8)
+        pbar.update(1)
+        
+        # 컬러바 추가
+        cbar = fig.colorbar(quiver, ax=ax, label=f'E-field Magnitude ({efield_unit})')
+        pbar.update(1)
+        
+        # 축 레이블 및 제목
+        ax.set_xlabel(f'X ({units})', fontsize=12)
+        ax.set_ylabel(f'Z ({units})', fontsize=12)
+        ax.set_title(title, fontsize=14, fontweight='bold', pad=15)
+        pbar.update(1)
+        
+        # 그리드 및 동일 비율
+        ax.grid(True, alpha=0.3)
+        ax.set_aspect('equal', adjustable='box')
+        pbar.update(1)
+        
+        plt.tight_layout()
+        pbar.update(1)
+    
+    if output_path:
+        print(f"💾 플롯 저장 중: {output_path}")
+        with tqdm(total=1, desc="파일 저장", unit="file", leave=False) as pbar:
+            plt.savefig(output_path, dpi=300, bbox_inches='tight')
+            pbar.update(1)
+        print(f"✅ Quiver 플롯 저장됨: {output_path}")
+    
+    if HAS_DISPLAY:
+        plt.show(block=True)
+    elif not output_path:
+        print("⚠️  DISPLAY가 없어 플롯을 표시할 수 없습니다. --output 옵션으로 파일 저장하세요.")
+    
+    plt.close()
+
+
+def plot_2d(coords, values, units, projection, title, output_path=None, efield_unit="mV/m", show_neurons=False):
     print("🎨 플롯 생성 중...")
     axis_map = {"xy": (0, 1), "xz": (0, 2), "yz": (1, 2)}
     a0, a1 = axis_map[projection]
@@ -253,6 +551,11 @@ def plot_2d(coords, values, units, projection, title, output_path=None, efield_u
         pbar.update(1)
         ax.set_title(title, fontsize=14, fontweight='bold', pad=15)
         ax.set_aspect("equal", adjustable="box")
+        
+        # 뉴런 그리기
+        if show_neurons:
+            plot_neurons_on_2d(ax, projection, units)
+        
         pbar.update(1)
         plt.tight_layout()
         pbar.update(1)
@@ -274,7 +577,7 @@ def plot_2d(coords, values, units, projection, title, output_path=None, efield_u
 
 def plot_time_3d(values, coords_m, component, time_step_us, units, title, output_path=None, 
                   slice_axis=None, slice_value=0.0, slice_thickness=50.0, downsample_step=1,
-                  time_downsample=1, x_range=None, time_range=None, efield_unit="mV/m"):
+                  time_downsample=1, x_range=None, time_range=None, efield_unit="mV/m", show_neurons=False):
     """
     시간축을 사용한 3D 플롯: (x, time, z) 공간에서 E-field 시각화
     y축 대신 시간축을 사용합니다.
@@ -414,7 +717,7 @@ def plot_time_3d(values, coords_m, component, time_step_us, units, title, output
         field_values_plot = field_values.copy() * unit_scale
         
         # threshold도 변환된 단위 기준으로 설정
-        threshold_vm = 0.00005  # V/m 기준
+        threshold_vm = 0.00001  # V/m 기준
         threshold = threshold_vm * unit_scale
         
         # field_values 복사
@@ -444,19 +747,51 @@ def plot_time_3d(values, coords_m, component, time_step_us, units, title, output
         else:
             point_sizes = np.ones_like(field_values_plot_filtered) * base_size
         
+        # Ez 성분의 경우 diverging colormap 사용 (마이너스/플러스 구분)
+        if component == "ez":
+            # Ez 값을 그대로 사용 (마이너스와 플러스 모두 포함)
+            color_values = field_values_plot_filtered
+            # Diverging colormap 사용 (0을 중심으로 마이너스/플러스 구분)
+            cmap_to_use = "RdBu_r"  # 빨강(플러스) - 파랑(마이너스)
+            # 색상 범위를 대칭적으로 설정
+            vmax = np.max(np.abs(color_values)) if len(color_values) > 0 else 1.0
+            vmin = -vmax
+        else:
+            # Ex나 magnitude의 경우 기존 방식 사용
+            color_values = field_values_plot_filtered
+            cmap_to_use = "viridis_r"
+            vmin = None
+            vmax = None
+        
         # scatter accepts arrays for all parameters including alpha and s
         # Note: matplotlib scatter actually accepts arrays for zs and s, but type checker doesn't recognize it
         sc = ax.scatter(x_coords_filtered, time_coords_filtered, z_coords_filtered, 
-                        c=field_values_plot_filtered, s=point_sizes, 
-                        cmap="viridis_r", alpha=alpha_values)  # type: ignore[arg-type, call-overload]
+                        c=color_values, s=point_sizes, 
+                        cmap=cmap_to_use, alpha=alpha_values, vmin=vmin, vmax=vmax)  # type: ignore[arg-type, call-overload]
         pbar.update(1)
         ax.set_xlabel(f"x ({units})")
         ax.set_ylabel("Time (ms)")
         ax.set_zlabel(f"z ({units})")
+        
+        # x축 범위 제한 (x_range가 지정된 경우)
+        if x_range is not None:
+            x_min, x_max = x_range
+            ax.set_xlim(x_min, x_max)
+            print(f"📍 X축 범위 제한: {x_min:.1f} ~ {x_max:.1f} {units}")
+        
         pbar.update(1)
-        fig.colorbar(sc, ax=ax, shrink=0.6, label=f"E-field ({efield_unit})")
+        # Ez의 경우 라벨에 방향성 표시
+        if component == "ez":
+            fig.colorbar(sc, ax=ax, shrink=0.6, label=f"E_z ({efield_unit})")
+        else:
+            fig.colorbar(sc, ax=ax, shrink=0.6, label=f"E-field ({efield_unit})")
         pbar.update(1)
         ax.set_title(title, fontsize=14, fontweight='bold', pad=15)
+        
+        # 뉴런 그리기 (time=-1 위치에 x-z 평면)
+        if show_neurons:
+            plot_neurons_on_3d(ax, units, time_value=-1.0)
+        
         plt.tight_layout()
         pbar.update(1)
     
@@ -499,8 +834,14 @@ def main():
     parser.add_argument("--output", type=str, default=None, help="Output file path for the plot")
     parser.add_argument("--time-axis", action="store_true", help="Use time axis instead of y-axis for 3D plot (x, time, z)")
     parser.add_argument("--time-downsample", type=int, default=1, help="Time axis downsampling factor for time-axis plot (default: 1)")
-    parser.add_argument("--time-range", type=float, nargs=2, default=[0, 30], metavar=('MIN', 'MAX'), help="Time range in ms (default: 0 30)")
+    parser.add_argument("--time-range", type=float, nargs=2, default=[0, 0.5], metavar=('MIN', 'MAX'), help="Time range in ms (default: 0 0.5)")
     parser.add_argument("--efield-unit", choices=["V/m", "mV/m", "μV/m", "V/mm"], default="mV/m", help="E-field unit for display (default: mV/m)")
+    parser.add_argument("--show-neurons", action="store_true", help="Show SimplePyramidal neurons on the plot (soma as red circle, axon as red line)")
+    parser.add_argument("--quiver", action="store_true", help="Plot E-field direction as arrows (quiver plot) on x-z plane")
+    parser.add_argument("--quiver-time-ms", type=float, default=0.05, help="Time in ms for quiver plot (default: 0.05 ms, note: t=0 has zero E-field)")
+    parser.add_argument("--y-slice", type=float, default=42.0, help="Y slice value for quiver plot (default: 42.0 um)")
+    parser.add_argument("--y-slice-thickness", type=float, default=1.0, help="Y slice thickness for quiver plot (default: 1.0 um)")
+    parser.add_argument("--quiver-downsample", type=int, default=5, help="Downsampling step for quiver plot arrows (default: 5)")
     args = parser.parse_args()
 
     values, coords_m = load_data(args.values, args.coords)
@@ -510,6 +851,40 @@ def main():
     else:
         t_idx = time_to_index(args.time_ms, args.time_step_us, t_max)
 
+    # Quiver 플롯 모드 (E-field 방향 화살표)
+    if args.quiver:
+        coords = coords_m if args.units == "m" else coords_m * 1e6
+        
+        # 지정된 시간의 Ex, Ez 값 가져오기
+        quiver_t_idx = time_to_index(args.quiver_time_ms, args.time_step_us, t_max)
+        quiver_time_ms = quiver_t_idx * args.time_step_us / 1000.0
+        
+        ex_values = values[0, :, quiver_t_idx]  # Ex at specified time
+        ez_values = values[1, :, quiver_t_idx]  # Ez at specified time
+        
+        # 전기장 크기 확인
+        magnitude = np.sqrt(ex_values**2 + ez_values**2)
+        max_mag = np.max(magnitude)
+        print(f"E-field at t = {quiver_time_ms:.3f} ms (index {quiver_t_idx}): max magnitude = {max_mag:.6e} V/m")
+        
+        if max_mag < 1e-10:
+            print(f"WARNING: E-field is essentially zero at t = {quiver_time_ms:.3f} ms.")
+            print(f"  Try a different time point (e.g., --quiver-time-ms 0.05)")
+        
+        title = f"E-field Direction at t = {quiver_time_ms:.3f} ms\nY = {args.y_slice:.1f} ± {args.y_slice_thickness/2:.1f} {args.units}"
+        
+        # 출력 경로 설정
+        if args.output:
+            output_path = args.output
+        else:
+            output_dir = os.path.join(script_dir, "visualize_efield_output")
+            os.makedirs(output_dir, exist_ok=True)
+            output_path = os.path.join(output_dir, f"efield_quiver_t{quiver_time_ms:.3f}_y{args.y_slice:.1f}.png")
+        
+        plot_2d_quiver(coords, ex_values, ez_values, args.units, title, output_path, 
+                      args.efield_unit, args.y_slice, args.y_slice_thickness, args.quiver_downsample)
+        return
+
     # 시간축 플롯 모드
     if args.time_axis:
         component_names = {"ex": "Electric Field (E_x)", "ez": "Electric Field (E_z)", "mag": "Electric Field Magnitude"}
@@ -517,6 +892,16 @@ def main():
         title = f"Spatial-Temporal Distribution of {component_name}"
         if args.slice_axis:
             title += f"\nSlice: {args.slice_axis} = {args.slice_value:.1f} ± {args.slice_thickness/2:.1f} {args.units}"
+        
+        # time-axis 모드에서 x_range가 지정되지 않았으면 기본값 -500~500um 설정
+        x_range_to_use = args.x_range
+        if x_range_to_use is None:
+            # units에 따라 변환 (um 단위로 -500~500)
+            if args.units == "um":
+                x_range_to_use = [-500.0, 500.0]
+            else:  # m 단위
+                x_range_to_use = [-500.0e-6, 500.0e-6]
+            print(f"📍 Time-axis 모드: X 범위 기본값 설정: {x_range_to_use[0]:.1f} ~ {x_range_to_use[1]:.1f} {args.units}")
         
         # 출력 경로 설정
         if args.output:
@@ -532,7 +917,7 @@ def main():
         
         plot_time_3d(values, coords_m, args.component, args.time_step_us, args.units, 
                      title, output_path, args.slice_axis, args.slice_value, 
-                     args.slice_thickness, args.downsample, args.time_downsample, args.x_range, args.time_range, args.efield_unit)
+                     args.slice_thickness, args.downsample, args.time_downsample, x_range_to_use, args.time_range, args.efield_unit, args.show_neurons)
     else:
         # 기존 플롯 모드 (특정 시간 지점)
         coords = coords_m if args.units == "m" else coords_m * 1e6
@@ -577,9 +962,9 @@ def main():
             output_path = os.path.join(output_dir, filename)
 
         if args.slice_axis:
-            plot_2d(coords, field, args.units, args.projection, title, output_path, args.efield_unit)
+            plot_2d(coords, field, args.units, args.projection, title, output_path, args.efield_unit, args.show_neurons)
         else:
-            plot_3d(coords, field, args.units, title, output_path, auto_save=True, efield_unit=args.efield_unit)
+            plot_3d(coords, field, args.units, title, output_path, auto_save=True, efield_unit=args.efield_unit, show_neurons=args.show_neurons)
 
 
 if __name__ == "__main__":

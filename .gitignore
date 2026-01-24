@@ -8,10 +8,23 @@ twin_cons_cathodicfirst_400us_100Hz_single10ms_Ez/
 # Allen Brain Atlas data
 allen_neuron_321923685/
 allen_neuron_486239338/
+allen_neuron_529898751/
 
 # Simulation output
 simulate_tES_output/
+simulate_xz_output/
 visualize_efield_output/
+visualize_morphology_output/
+
+# NEURON compiled files
+x86_64/
+i686/
+umac/
+arm64/
+nrnmech.dll
+*.o
+*.c
+mod_func.cpp
 
 # Python cache
 __pycache__/
