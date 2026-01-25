@@ -47,7 +47,6 @@ venv.bak/
 # IDE
 .vscode/
 .idea/
-cursor_ai_document/
 *.swp
 *.swo
 *~

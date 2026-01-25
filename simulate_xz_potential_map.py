@@ -14,7 +14,7 @@ import matplotlib.pyplot as plt
 h.load_file("stdrun.hoc")
 
 # --- 0. Simulation Configuration ---
-ALLEN_CELL_ID = '486239338'  # Neuron model ID
+ALLEN_CELL_ID = '529898751'  # Neuron model ID
 
 # E-field scale list (will iterate through all scales)
 E_FIELD_SCALES = [1, 10, 20, 30, 40, 50]  # 1x, 10x, 20x, 30x, 40x, 50x
