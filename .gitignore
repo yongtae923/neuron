@@ -4,6 +4,7 @@
 # Ansys data folders
 twin_cons_cathodicfirst_400us_100Hz_single10ms_Ex/
 twin_cons_cathodicfirst_400us_100Hz_single10ms_Ez/
+ansys/
 
 # Allen Brain Atlas data
 allen_neuron_321923685/
