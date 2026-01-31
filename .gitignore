@@ -2,11 +2,13 @@
 *.npy
 
 # Ansys data folders
+efield/
 twin_cons_cathodicfirst_400us_100Hz_single10ms_Ex/
 twin_cons_cathodicfirst_400us_100Hz_single10ms_Ez/
 ansys/
 
 # Allen Brain Atlas data
+allen_model/
 allen_neuron_321923685/
 allen_neuron_486239338/
 allen_neuron_529898751/
