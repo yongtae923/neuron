@@ -3,13 +3,13 @@
 Ansys E-field 데이터 추출 및 검증 스크립트
 
 기능:
-1. Ex, Ey, Ez 폴더에서 1사이클(201개 파일) 데이터 로드
+1. Ex, Ey, Ez 폴더에서 N사이클 데이터 로드 (1사이클=201개 파일, 10ms/50us)
 2. 좌표 추출 (X, Y, Z)
 3. E-field 값 추출 및 NumPy 배열로 저장
 4. 데이터 무결성 검증
 
 출력:
-- E_field_1cycle.npy: Shape (3, N_spatial, 201) - Ex, Ey, Ez 성분
+- E_field_Ncycle.npy: Shape (3, N_spatial, N_steps) - Ex, Ey, Ez 성분
 - E_field_grid_coords.npy: Shape (N_spatial, 3) - X, Y, Z 좌표
 """
 
@@ -35,12 +35,16 @@ EX_DIR = os.path.join(EFIELD_BASE_DIR, "twin_cons_cathodicfirst_400us_100Hz_sing
 EY_DIR = os.path.join(EFIELD_BASE_DIR, "twin_cons_cathodicfirst_400us_100Hz_single10ms_xyz_Ey")
 EZ_DIR = os.path.join(EFIELD_BASE_DIR, "twin_cons_cathodicfirst_400us_100Hz_single10ms_xyz_Ez")
 
+# --- Cycle 설정: 1사이클 = 201 파일 (10ms, 50us 간격) ---
+NUM_CYCLES = 4  # 추출할 사이클 수
+STEPS_PER_CYCLE = 201  # 1사이클당 파일 개수
+TOTAL_STEPS = STEPS_PER_CYCLE * NUM_CYCLES  # 총 시간 스텝 수
+
 # 출력 파일 경로 (efield 폴더에 저장)
-OUTPUT_E_FIELD_FILE = os.path.join(EFIELD_BASE_DIR, "E_field_1cycle.npy")
+OUTPUT_E_FIELD_FILE = os.path.join(EFIELD_BASE_DIR, f"E_field_{NUM_CYCLES}cycle.npy")
 OUTPUT_COORDS_FILE = os.path.join(EFIELD_BASE_DIR, "E_field_grid_coords.npy")
 
 # 상수
-TOTAL_STEPS = 201  # 1사이클 = 10ms, 50us 간격 = 201개 파일
 BATCH_SIZE = 10  # 배치 단위로 처리할 파일 개수 (체크포인트용)
 
 # 멀티프로세싱 설정: 전체 코어 중 4개 남기고 나머지 사용
@@ -55,7 +59,8 @@ os.makedirs(TEMP_DIR, exist_ok=True)
 print("=" * 60)
 print("E-field 데이터 추출 및 검증 스크립트")
 print("=" * 60)
-print(f"\n기준 디렉토리: {BASE_DIR}")
+print(f"\n사이클 설정: {NUM_CYCLES} cycle(s), {STEPS_PER_CYCLE} steps/cycle → 총 {TOTAL_STEPS} time steps")
+print(f"기준 디렉토리: {BASE_DIR}")
 print(f"Ex 경로: {EX_DIR}")
 print(f"Ey 경로: {EY_DIR}")
 print(f"Ez 경로: {EZ_DIR}")
@@ -156,10 +161,13 @@ def load_e_field_component(component_dir, total_steps=201, batch_size=20):
             return 0
     file_list = sorted(file_list, key=_sort_key)
     
-    if len(file_list) != total_steps:
-        if len(file_list) == 0:
-            raise FileNotFoundError(f"'{component_dir}' 폴더에서 파일을 찾을 수 없습니다.")
-        print(f"경고: 예상 파일 개수 ({total_steps}개)와 실제 파일 개수 ({len(file_list)}개)가 다릅니다.")
+    if len(file_list) == 0:
+        raise FileNotFoundError(f"'{component_dir}' 폴더에서 파일을 찾을 수 없습니다.")
+    # Load at most total_steps files (e.g. 1 cycle); caller tiles to NUM_CYCLES if needed
+    steps_to_load = min(len(file_list), total_steps)
+    if len(file_list) < total_steps:
+        print(f"   (파일 {len(file_list)}개 → 1사이클 {steps_to_load}개만 로드, 출력 시 {total_steps} 스텝으로 반복)")
+    file_list = file_list[:steps_to_load]
     
     # 첫 번째 파일로 공간 지점 수 확인
     try:
@@ -172,12 +180,12 @@ def load_e_field_component(component_dir, total_steps=201, batch_size=20):
     component_name = os.path.basename(component_dir)
     print(f"\n-> {component_name} 데이터 로드 시작...")
     print(f"   공간 지점 수: {num_spatial_points:,}")
-    print(f"   시간 스텝 수: {total_steps}")
+    print(f"   로드할 시간 스텝 수: {steps_to_load}")
     print(f"   배치 크기: {batch_size}개 파일/배치")
     
     # 체크포인트 로드
     processed_batches = load_checkpoint(component_name)
-    num_batches = (total_steps + batch_size - 1) // batch_size
+    num_batches = (steps_to_load + batch_size - 1) // batch_size
     
     if processed_batches:
         print(f"   체크포인트 발견: {len(processed_batches)}/{num_batches} 배치 완료")
@@ -188,7 +196,7 @@ def load_e_field_component(component_dir, total_steps=201, batch_size=20):
     # 배치 단위로 처리
     for batch_idx in range(num_batches):
         start_idx = batch_idx * batch_size
-        end_idx = min(start_idx + batch_size, total_steps)
+        end_idx = min(start_idx + batch_size, steps_to_load)
         batch_files = file_list[start_idx:end_idx]
         
         batch_file_path = get_batch_file_path(component_name, batch_idx)
@@ -394,59 +402,78 @@ def verify_data(E_field_data, grid_coords, total_steps=201):
 # --- 4. 메인 실행 ---
 if __name__ == "__main__":
     try:
-        # 4.1. E-field 데이터 로드
-        print("\n" + "=" * 60)
-        print("1단계: E-field 데이터 로드")
-        print("=" * 60)
-        
-        E_x = load_e_field_component(EX_DIR, TOTAL_STEPS, BATCH_SIZE)
-        E_y = load_e_field_component(EY_DIR, TOTAL_STEPS, BATCH_SIZE)
-        E_z = load_e_field_component(EZ_DIR, TOTAL_STEPS, BATCH_SIZE)
-        
-        # Shape 확인 (모든 성분이 동일한 공간 지점 수를 가져야 함)
-        if not (E_x.shape[0] == E_y.shape[0] == E_z.shape[0]):
-            raise ValueError(
-                f"공간 지점 수가 일치하지 않습니다: "
-                f"Ex={E_x.shape[0]}, Ey={E_y.shape[0]}, Ez={E_z.shape[0]}"
-            )
-        
-        # 3개 성분을 스택: Shape (3, N_spatial, 201)
-        E_field_data = np.stack((E_x, E_y, E_z), axis=0)
-        print(f"\n최종 E-field 데이터 Shape: {E_field_data.shape}")
-        
-        # 4.2. 좌표 추출
-        print("\n" + "=" * 60)
-        print("2단계: 좌표 추출")
-        print("=" * 60)
-        
-        # Ex 폴더의 첫 번째 파일에서 좌표 추출 (모든 폴더의 좌표는 동일)
-        first_ex_file = os.path.join(EX_DIR, "001.txt")
-        grid_coords = extract_coordinates(first_ex_file)
-        
-        # 4.3. 데이터 검증
-        verify_data(E_field_data, grid_coords, TOTAL_STEPS)
-        
-        # 4.4. 파일 저장
-        print("\n" + "=" * 60)
-        print("3단계: 파일 저장")
-        print("=" * 60)
-        
-        np.save(OUTPUT_E_FIELD_FILE, E_field_data)
-        file_size_mb = os.path.getsize(OUTPUT_E_FIELD_FILE) / (1024**2)
-        print(f"E-field 데이터 저장 완료: {OUTPUT_E_FIELD_FILE}")
-        print(f"   파일 크기: {file_size_mb:.2f} MB")
-        
-        np.save(OUTPUT_COORDS_FILE, grid_coords)
-        coords_size_mb = os.path.getsize(OUTPUT_COORDS_FILE) / (1024**2)
-        print(f"좌표 데이터 저장 완료: {OUTPUT_COORDS_FILE}")
-        print(f"   파일 크기: {coords_size_mb:.2f} MB")
-        
-        print("\n" + "=" * 60)
-        print("모든 작업 완료!")
-        print("=" * 60)
-        print(f"\n생성된 파일:")
-        print(f"  - {OUTPUT_E_FIELD_FILE}")
-        print(f"  - {OUTPUT_COORDS_FILE}")
+        # If final npy files exist, load and verify only (skip heavy extraction)
+        if os.path.exists(OUTPUT_E_FIELD_FILE) and os.path.exists(OUTPUT_COORDS_FILE):
+            print("\n" + "=" * 60)
+            print("기존 npy 파일 발견 — 검증만 수행")
+            print("=" * 60)
+            E_field_data = np.load(OUTPUT_E_FIELD_FILE)
+            grid_coords = np.load(OUTPUT_COORDS_FILE)
+            print(f"로드: E_field Shape {E_field_data.shape}, coords Shape {grid_coords.shape}")
+            verify_data(E_field_data, grid_coords, TOTAL_STEPS)
+            print("\n검증 완료. (추출/저장 생략)")
+        else:
+            # 4.1. E-field 데이터 로드
+            print("\n" + "=" * 60)
+            print("1단계: E-field 데이터 로드")
+            print("=" * 60)
+            
+            # Load 1 cycle (STEPS_PER_CYCLE files) per component
+            E_x = load_e_field_component(EX_DIR, STEPS_PER_CYCLE, BATCH_SIZE)
+            E_y = load_e_field_component(EY_DIR, STEPS_PER_CYCLE, BATCH_SIZE)
+            E_z = load_e_field_component(EZ_DIR, STEPS_PER_CYCLE, BATCH_SIZE)
+            
+            # Shape 확인 (모든 성분이 동일한 공간 지점 수를 가져야 함)
+            if not (E_x.shape[0] == E_y.shape[0] == E_z.shape[0]):
+                raise ValueError(
+                    f"공간 지점 수가 일치하지 않습니다: "
+                    f"Ex={E_x.shape[0]}, Ey={E_y.shape[0]}, Ez={E_z.shape[0]}"
+                )
+            
+            # Repeat 1 cycle to NUM_CYCLES along time axis
+            if NUM_CYCLES > 1:
+                print(f"\n   1사이클({STEPS_PER_CYCLE} 스텝) → {NUM_CYCLES}회 반복하여 {TOTAL_STEPS} 스텝 생성")
+                E_x = np.tile(E_x, (1, NUM_CYCLES))
+                E_y = np.tile(E_y, (1, NUM_CYCLES))
+                E_z = np.tile(E_z, (1, NUM_CYCLES))
+            
+            # 3개 성분을 스택: Shape (3, N_spatial, TOTAL_STEPS)
+            E_field_data = np.stack((E_x, E_y, E_z), axis=0)
+            print(f"\n최종 E-field 데이터 Shape: {E_field_data.shape}")
+            
+            # 4.2. 좌표 추출
+            print("\n" + "=" * 60)
+            print("2단계: 좌표 추출")
+            print("=" * 60)
+            
+            # Ex 폴더의 첫 번째 파일에서 좌표 추출 (모든 폴더의 좌표는 동일)
+            first_ex_file = os.path.join(EX_DIR, "001.txt")
+            grid_coords = extract_coordinates(first_ex_file)
+            
+            # 4.3. 데이터 검증
+            verify_data(E_field_data, grid_coords, TOTAL_STEPS)
+            
+            # 4.4. 파일 저장
+            print("\n" + "=" * 60)
+            print("3단계: 파일 저장")
+            print("=" * 60)
+            
+            np.save(OUTPUT_E_FIELD_FILE, E_field_data)
+            file_size_mb = os.path.getsize(OUTPUT_E_FIELD_FILE) / (1024**2)
+            print(f"E-field 데이터 저장 완료: {OUTPUT_E_FIELD_FILE}")
+            print(f"   파일 크기: {file_size_mb:.2f} MB")
+            
+            np.save(OUTPUT_COORDS_FILE, grid_coords)
+            coords_size_mb = os.path.getsize(OUTPUT_COORDS_FILE) / (1024**2)
+            print(f"좌표 데이터 저장 완료: {OUTPUT_COORDS_FILE}")
+            print(f"   파일 크기: {coords_size_mb:.2f} MB")
+            
+            print("\n" + "=" * 60)
+            print("모든 작업 완료!")
+            print("=" * 60)
+            print(f"\n생성된 파일:")
+            print(f"  - {OUTPUT_E_FIELD_FILE}")
+            print(f"  - {OUTPUT_COORDS_FILE}")
         
     except FileNotFoundError as e:
         print(f"\n오류: 파일을 찾을 수 없습니다: {e}")
