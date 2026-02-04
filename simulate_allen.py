@@ -43,8 +43,8 @@ WARMUP_TIME_MS = 100.0   # Warmup without E-field (ms); reduce (e.g. 100) for fa
 E_FIELD_SCALE = 1.0      # E-field magnitude scale factor
 DT_MS = 0.05   # Simulation dt (ms); 0.05 = fewer steps, 0.025 = finer
 
-# E-field unit conversion: FEM -> V/m; (V/m * um) -> mV
-E_UNIT_SCALE = 1e6   # e.g. V/um -> V/m
+# E-field unit: current npy is already in V/m; only (V/m * um) -> mV below
+E_UNIT_SCALE = 1.0
 E_FACTOR = 1e-3      # (V/m * um) -> mV
 
 # Neuron position (um)
@@ -281,9 +281,7 @@ print("--- Load E-field data ---")
 with tqdm(total=2, desc="Loading", unit="file", ncols=80) as pbar_load:
     try:
         pbar_load.set_postfix_str("E-field")
-        E_field_values = np.load(E_FIELD_VALUES_FILE)
-        if E_UNIT_SCALE != 1.0:
-            E_field_values = E_field_values * E_UNIT_SCALE
+        E_field_values = np.load(E_FIELD_VALUES_FILE)  # already V/m
         pbar_load.update(1)
         pbar_load.set_postfix_str("Grid coords")
         coords_m = np.load(E_GRID_COORDS_FILE)
