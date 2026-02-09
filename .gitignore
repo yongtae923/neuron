@@ -1,6 +1,7 @@
 # Ansys / E-field data (large: raw txt + npy often 100MB+)
 efield/
 efield_npy/
+output/
 
 # Allen Brain Atlas cell models (SWC + mod files, ~several MB per cell)
 allen_model/
