@@ -2,8 +2,9 @@
 """
 Allen model + E-field simulation at multiple spatial positions (PARALLEL).
 
-- For each downsampled E-field grid point (outside coil, within ROI),
-  run a full neuron simulation and record Vm at soma.
+- One-time: get equilibrium start point (0V -> equilibrium, no E-field, like simulate_one.py)
+- For each E-field grid point (outside coil, within ROI),
+  run neuron simulation from equilibrium, with E-field from t=0, record Vm at soma.
 - Uses multiprocessing for parallel execution (cpu_count - 1 workers)
 - Results: 3D Vm array (position x time) saved as npy
 - Plotting is handled separately (see plot_allen.py)
@@ -51,7 +52,11 @@ N_WORKERS = max(1, mp.cpu_count() - 1)  # 코어 수 - 1
 TIME_STEP_US = 50.0   # E-field data time step (us)
 TIME_STEP_MS = TIME_STEP_US / 1000.0  # 0.05 ms
 DT_MS = 0.05   # Simulation dt (ms)
-WARMUP_TIME_MS = 500.0   # Warmup without E-field (ms)
+
+# Equilibrium (0V start, no E-field) for initial condition
+EQ_MAX_TIME_MS = 500.0
+EQ_THRESHOLD_MV = 0.001
+EQ_STABLE_STEPS = 10
 
 # Time ROI (ms): simulate this range
 TIME_ROI_MS = (0.0, 0.5)  # (start, end) or None for full
@@ -294,71 +299,84 @@ def _apply_phi_to_segments(neuron_model, phi_sec):
             seg.e_extracellular = _interp_phi(arc, phis, target_arc)
 
 
+def get_equilibrium_vm(neuron_model, dt_ms=0.05):
+    """
+    Run 0V start, no E-field until equilibrium (like simulate_one.py).
+    Returns soma Vm at equilibrium for use as v_init.
+    """
+    from neuron import h
+    from neuron.units import mV
+    for sec in neuron_model.all:
+        for seg in sec:
+            seg.e_extracellular = 0.0
+    h.finitialize(0.0 * mV)
+    h.dt = dt_ms
+    h.tstop = EQ_MAX_TIME_MS
+    soma_seg = neuron_model.soma(0.5)
+    stable_count = 0
+    prev_v = float(soma_seg.v)
+    while h.t < h.tstop - 1e-9:
+        h.fadvance()
+        curr_v = float(soma_seg.v)
+        if abs(curr_v - prev_v) < EQ_THRESHOLD_MV:
+            stable_count += 1
+            if stable_count >= EQ_STABLE_STEPS:
+                break
+        else:
+            stable_count = 0
+        prev_v = curr_v
+    return float(soma_seg.v)
+
+
 def worker_simulate(args):
     """Worker function: run simulation at one position."""
     idx, pos_um, record_times_ms = args
-    
+
     # Create neuron (suppress output)
     import io
     import contextlib
     with contextlib.redirect_stdout(io.StringIO()):
         neuron_model = AllenNeuronModel(x=0, y=0, z=0, cell_id=_config['CELL_ID'])
-    
+
     # Move to target position
     sx, sy, sz = _xyz_at_seg(neuron_model.soma, 0.5)
     tx, ty, tz = pos_um
     _translate_morphology(neuron_model.all, tx - sx, ty - sy, tz - sz)
-    
+
     # Build morph cache
     morph_cache, topo = _build_morph_cache(neuron_model)
-    
-    # Simulation setup
-    h.tstop = _config['WARMUP_TIME_MS'] + _config['TOTAL_TIME_MS'] + _config['DT_MS']
+
+    # One-time: get equilibrium start point (0V -> equilibrium, no E-field)
+    v_init = _config['V_INIT_EQUILIBRIUM']
+    h.finitialize(v_init * mV)
     h.dt = _config['DT_MS']
     h.celsius = 34.0
-    h.finitialize(-65.0 * mV)
-    
-    # Warmup (no E-field)
-    while h.t < _config['WARMUP_TIME_MS'] - 1e-9:
-        for sec in neuron_model.all:
-            for seg in sec:
-                seg.e_extracellular = 0.0
-        h.fadvance()
-    
+    h.tstop = _config['TOTAL_TIME_MS'] + _config['DT_MS']
+
     # Record transmembrane Vm (= v - e_extracellular) at specified times
+    # No warmup: start at t=0 with E-field, from equilibrium
     Vm_list = []
     rec_idx = 0
 
-    # If the first requested time is 0 ms, record right after warmup
-    # (before applying E-field at t=0) so the trace starts at resting potential.
-    if len(record_times_ms) > 0 and abs(float(record_times_ms[0])) < 1e-12:
-        soma = neuron_model.soma(0.5)
-        Vm_list.append(float(soma.v - getattr(soma, "e_extracellular", 0.0)))
-        rec_idx = 1
-
     while h.t < h.tstop - 1e-9 and rec_idx < len(record_times_ms):
-        t_rel = h.t - _config['WARMUP_TIME_MS']
-        
-        # Apply E-field
-        if t_rel >= 0:
-            phi_sec = _compute_phi_sections(neuron_model, morph_cache, topo, t_rel)
-            _apply_phi_to_segments(neuron_model, phi_sec)
-        else:
-            for sec in neuron_model.all:
-                for seg in sec:
-                    seg.e_extracellular = 0.0
-        
+        t_rel = h.t  # t=0 is start
+
+        # Apply E-field from t=0
+        phi_sec = _compute_phi_sections(neuron_model, morph_cache, topo, t_rel)
+        _apply_phi_to_segments(neuron_model, phi_sec)
+
         # Record if this is a target time
         if rec_idx < len(record_times_ms) and abs(t_rel - record_times_ms[rec_idx]) < _config['DT_MS'] / 2:
             soma = neuron_model.soma(0.5)
             Vm_list.append(float(soma.v - getattr(soma, "e_extracellular", 0.0)))
             rec_idx += 1
-        
+
         h.fadvance()
     
     # Pad if needed
+    pad_val = _config['V_INIT_EQUILIBRIUM']
     while len(Vm_list) < len(record_times_ms):
-        Vm_list.append(Vm_list[-1] if Vm_list else -65.0)
+        Vm_list.append(Vm_list[-1] if Vm_list else pad_val)
     
     return idx, np.array(Vm_list, dtype=np.float32)
 
@@ -419,9 +437,22 @@ if __name__ == "__main__":
     record_times_ms = time_ms_arr - TIME_START_MS
     
     # Config dict for workers
+    # One-time: get equilibrium start point (0V -> equilibrium, no E-field)
+    print("\n--- Equilibrium start point (0V, no E-field) ---")
+    import io
+    import contextlib
+    from neuron import h as _h_main
+    from neuron.units import mV as _mV_main
+    _h_main.load_file("stdrun.hoc")
+    from model_allen_neuron import AllenNeuronModel as _AllenModel
+    with contextlib.redirect_stdout(io.StringIO()):
+        _neuron_temp = _AllenModel(x=0, y=0, z=0, cell_id=CELL_ID)
+    v_init_equilibrium = get_equilibrium_vm(_neuron_temp, dt_ms=DT_MS)
+    print(f"  Equilibrium Vm: {v_init_equilibrium:.2f} mV")
+
     config = {
         'CELL_ID': CELL_ID,
-        'WARMUP_TIME_MS': WARMUP_TIME_MS,
+        'V_INIT_EQUILIBRIUM': v_init_equilibrium,
         'TOTAL_TIME_MS': TOTAL_TIME_MS,
         'TIME_START_MS': TIME_START_MS,
         'TIME_STEP_MS': TIME_STEP_MS,
@@ -432,7 +463,7 @@ if __name__ == "__main__":
     
     # Estimate time (single test)
     print(f"\n--- Estimate simulation time ---")
-    print(f"  Each simulation: {WARMUP_TIME_MS}ms warmup + {TOTAL_TIME_MS:.2f}ms with E-field")
+    print(f"  Each simulation: {TOTAL_TIME_MS:.2f}ms with E-field (start from equilibrium)")
     print(f"  Running 1 test simulation...")
     
     def format_time(seconds):
