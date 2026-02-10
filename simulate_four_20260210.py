@@ -532,8 +532,9 @@ def main() -> None:
     # recorders
     npos = len(POSITIONS_UM)
     t_vec = np.zeros(int(round(TSTOP_REL_MS / SIM_DT_MS)) + 1, dtype=np.float64)
-    Vm_soma = np.zeros((npos, t_vec.size), dtype=np.float64)
-    Vext_soma = np.zeros((npos, t_vec.size), dtype=np.float64)
+    # Naming clarified: V_in = soma.v, V_ext = soma.vext[0]
+    V_in_soma = np.zeros((npos, t_vec.size), dtype=np.float64)
+    V_ext_soma = np.zeros((npos, t_vec.size), dtype=np.float64)
 
     # simulation loop
     for k in tqdm(range(t_vec.size), desc="Simulating", ncols=80):
@@ -559,11 +560,12 @@ def main() -> None:
 
         # record after applying phi, before fadvance
         for i, neuron in enumerate(neurons):
-            Vm_soma[i, k] = float(neuron.soma(0.5).v)
+            # V_in: intracellular (soma.v), V_ext: extracellular (soma.vext[0])
+            V_in_soma[i, k] = float(neuron.soma(0.5).v)
             try:
-                Vext_soma[i, k] = float(neuron.soma(0.5).vext[0])
+                V_ext_soma[i, k] = float(neuron.soma(0.5).vext[0])
             except Exception:
-                Vext_soma[i, k] = 0.0
+                V_ext_soma[i, k] = 0.0
 
         # quick debug: check e_extracellular range for neuron 1 early
         if k in (0, 1, 2):
@@ -575,12 +577,12 @@ def main() -> None:
                 mn, mx = float(np.min(e_vals)), float(np.max(e_vals))
                 print(f"[DEBUG k={k} t={t_rel:.6f} ms] N1 e_extracellular: min={mn:.6f} mV, max={mx:.6f} mV, range={(mx-mn):.6f} mV")
 
-            print(f"[DEBUG k={k} t={t_rel:.6f} ms] soma.v={Vm_soma[0,k]:.6f} mV, soma.vext0={Vext_soma[0,k]:.6e} mV")
+            print(f"[DEBUG k={k} t={t_rel:.6f} ms] V_in={V_in_soma[0,k]:.6f} mV, V_ext0={V_ext_soma[0,k]:.6e} mV")
 
-        # warn if Vm is extreme
-        vmax_abs = float(np.max(np.abs(Vm_soma[:, k])))
+        # warn if V_in is extreme
+        vmax_abs = float(np.max(np.abs(V_in_soma[:, k])))
         if vmax_abs > VM_EXTREME_WARN_MV:
-            print(f"\n[WARN] Extreme |Vm| detected at k={k}, t={t_rel:.6f} ms (max|Vm|={vmax_abs:.3f} mV).")
+            print(f"\n[WARN] Extreme |V_in| detected at k={k}, t={t_rel:.6f} ms (max|V_in|={vmax_abs:.3f} mV).")
             print("       코일 제외 매핑이 0%인지, 그리고 E-field max|E|를 확인하십시오.\n")
 
         # advance
@@ -603,8 +605,9 @@ def main() -> None:
         "efield_scale": E_FIELD_SCALE,
         "efield_on_window_ms": (EFIELD_ON_T0_MS, EFIELD_ON_T1_MS),
         "t_ms": t_vec,
-        "Vm_soma_mV": Vm_soma,
-        "Vext_soma_mV": Vext_soma,
+        # Naming clarified: V_in = soma.v, V_ext = soma.vext[0]
+        "V_in_soma_mV": V_in_soma,
+        "V_ext_soma_mV": V_ext_soma,
     }
     np.save(out_path, payload)
     print(f"\nSaved: {out_path}")
@@ -613,18 +616,18 @@ def main() -> None:
     print("\n=== Basic integrity checks ===")
     ok = True
     ok &= check_arrays_finite("t_ms", t_vec)
-    ok &= check_arrays_finite("Vm_soma_mV", Vm_soma)
-    ok &= check_arrays_finite("Vext_soma_mV", Vext_soma)
-    if Vm_soma.shape[1] != t_vec.size:
-        print("[FAIL] Vm time dimension mismatch.")
+    ok &= check_arrays_finite("V_in_soma_mV", V_in_soma)
+    ok &= check_arrays_finite("V_ext_soma_mV", V_ext_soma)
+    if V_in_soma.shape[1] != t_vec.size:
+        print("[FAIL] V_in time dimension mismatch.")
         ok = False
     else:
-        print("[OK]   Vm time dimension matches t length.")
+        print("[OK]   V_in time dimension matches t length.")
 
     gating_magnitude_report(
         t_ms=t_vec,
-        Vm=Vm_soma,
-        Vext=Vext_soma,
+        Vm=V_in_soma,   # interpret as V_in here
+        Vext=V_ext_soma,
         positions_um=POSITIONS_UM,
         on0=EFIELD_ON_T0_MS,
         on1=EFIELD_ON_T1_MS,
@@ -632,11 +635,11 @@ def main() -> None:
 
     print("\n=== Quick absolute range summary ===")
     for i, pos in enumerate(POSITIONS_UM):
-        v = Vm_soma[i]
-        ve = Vext_soma[i]
+        v = V_in_soma[i]
+        ve = V_ext_soma[i]
         print(f"Neuron {i+1} @ ({pos[0]:.1f},{pos[1]:.1f},{pos[2]:.1f}): "
-              f"min(Vm)={np.min(v):.6f}, max(Vm)={np.max(v):.6f}, max|Vm|={np.max(np.abs(v)):.6f} mV")
-        print(f"          min(Vext)={np.min(ve):.6f}, max(Vext)={np.max(ve):.6f}, max|Vext|={np.max(np.abs(ve)):.6f} mV")
+              f"min(V_in)={np.min(v):.6f}, max(V_in)={np.max(v):.6f}, max|V_in|={np.max(np.abs(v)):.6f} mV")
+        print(f"          min(V_ext)={np.min(ve):.6f}, max(V_ext)={np.max(ve):.6f}, max|V_ext|={np.max(np.abs(ve)):.6f} mV")
 
     if ok:
         print("\n[OK] Basic integrity checks passed.")
