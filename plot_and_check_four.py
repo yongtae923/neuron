@@ -9,23 +9,27 @@
 #   - ΔV_m  (demeaned V_m)                   : dV_m_demeaned_mV
 #
 # Options:
-#   --latest   : load newest .npy in ./output by mtime
+#   [scale]    : optional positional scale selector (1, 5, 10, 20)
+#   --latest   : keep behavior of loading newest matched file
 #   --file     : load a specific .npy
 #   --no-plot  : checks only
-#   --savefig  : save plot PNGs next to the npy file (and also ./plot/)
 #
 # Usage:
+#   python plot_and_check_four.py
+#   python plot_and_check_four.py 5
+#   python plot_and_check_four.py 10
+#   python plot_and_check_four.py 20
 #   python plot_and_check_four.py --latest
 #   python plot_and_check_four.py --file output/<file>.npy
 #   python plot_and_check_four.py --latest --no-plot
-#   python plot_and_check_four.py --latest --savefig
 # ------------------------------------------------------------
 
 from __future__ import annotations
 
 import os
 import argparse
-from typing import Tuple, Optional, Dict, Any
+import re
+from typing import Tuple, Optional, Dict, Any, List
 
 import numpy as np
 
@@ -46,6 +50,114 @@ def find_latest_npy(output_dir: str) -> Optional[str]:
         return None
     cand.sort(key=lambda p: os.path.getmtime(p), reverse=True)
     return cand[0]
+
+
+def _scale_to_tag(scale: float) -> str:
+    return str(float(scale)).rstrip("0").rstrip(".").replace(".", "p")
+
+
+def _scale_alias_tags(scale: float) -> List[str]:
+    """Return compatible filename tags for a numeric scale."""
+    s = float(scale)
+    tags = {_scale_to_tag(s), str(s).replace(".", "p")}
+    # Also accept integer-like form if scale is whole number (e.g. 5 -> "5")
+    if abs(s - round(s)) < 1e-12:
+        tags.add(str(int(round(s))))
+    return sorted(tags)
+
+
+def find_latest_sanity_by_scale(output_dir: str, scale: float) -> Optional[str]:
+    """
+    Find the newest sanity file for the requested scale.
+    - scale == 1.0: prefer legacy files without '_scale' in name.
+    - scale != 1.0: match files containing '_scale{tag}x_'.
+    """
+    if not os.path.isdir(output_dir):
+        return None
+
+    files: List[str] = []
+    for fn in os.listdir(output_dir):
+        if not fn.lower().endswith(".npy"):
+            continue
+        # Support both legacy and new naming:
+        # - legacy: sanity_cell<id>_..._scale5p0x_....npy or without scale token
+        # - new:    sanity_100x_cell<id>.npy
+        if not (fn.startswith("sanity_cell") or fn.startswith("sanity_")):
+            continue
+        files.append(fn)
+
+    if not files:
+        return None
+
+    scale = float(scale)
+    if abs(scale - 1.0) < 1e-12:
+        matched = [
+            fn for fn in files
+            if (
+                ("_scale" not in fn and not fn.startswith("sanity_"))
+                or fn.startswith("sanity_1x_cell")
+                or "_scale1x_" in fn
+                or "_scale1p0x_" in fn
+            )
+        ]
+        if not matched:
+            # fallback for explicitly saved scale1x files
+            matched = [fn for fn in files if "_scale1x_" in fn or "_scale1p0x_" in fn]
+    else:
+        tags = _scale_alias_tags(scale)
+        matched = []
+        for fn in files:
+            for tag in tags:
+                # legacy format token
+                if f"_scale{tag}x_" in fn:
+                    matched.append(fn)
+                    break
+                # new format: sanity_{tag}x_cell...
+                if f"sanity_{tag}x_cell" in fn:
+                    matched.append(fn)
+                    break
+
+    if not matched:
+        return None
+
+    paths = [os.path.join(output_dir, fn) for fn in matched]
+    paths.sort(key=lambda p: os.path.getmtime(p), reverse=True)
+    return paths[0]
+
+
+def find_all_simulate_four_outputs(output_dir: str) -> List[str]:
+    """
+    Collect all sanity outputs from simulate_four_v2.py and sort by scale.
+    Supports:
+    - new:    sanity_<scale>x_cell<id>.npy
+    - legacy: sanity_cell<id>_....npy
+    """
+    if not os.path.isdir(output_dir):
+        return []
+
+    def _scale_from_name(fn: str) -> float:
+        # New style: sanity_100x_cell...
+        m = re.match(r"^sanity_([0-9eE\+\-\.p]+)x_cell", fn)
+        if m:
+            tag = m.group(1).replace("p", ".")
+            try:
+                return float(tag)
+            except Exception:
+                return float("inf")
+        # Legacy 1x or unknown; keep near front
+        if fn.startswith("sanity_cell"):
+            return 1.0
+        return float("inf")
+
+    paths: List[str] = []
+    for fn in os.listdir(output_dir):
+        if not fn.lower().endswith(".npy"):
+            continue
+        if fn.startswith("sanity_") or fn.startswith("sanity_cell"):
+            paths.append(os.path.join(output_dir, fn))
+
+    paths.sort(key=lambda p: (_scale_from_name(os.path.basename(p)), os.path.getmtime(p)))
+    return paths
 
 
 def load_payload(path: str) -> Dict[str, Any]:
@@ -268,6 +380,7 @@ def plot_results(
     derived: Dict[str, np.ndarray],
     positions_um: np.ndarray,
     on_window: Tuple[float, float],
+    efield_scale: float,
 ) -> None:
     import matplotlib.pyplot as plt
 
@@ -279,6 +392,7 @@ def plot_results(
     os.makedirs(plot_dir, exist_ok=True)
 
     base_name = os.path.splitext(os.path.basename(npy_path))[0]
+    scale_tag = str(float(efield_scale)).rstrip("0").rstrip(".").replace(".", "p")
 
     # Helper to draw one figure and always save PNGs into ./plot/
     def draw_fig(y: np.ndarray, ylabel: str, title: str, suffix: str) -> None:
@@ -293,25 +407,25 @@ def plot_results(
         plt.legend()
 
         # Save into ./plot/ (default behavior)
-        out1 = os.path.join(plot_dir, base_name + f"_{suffix}.png")
+        # Filename order requested: scale first, variable second.
+        out1 = os.path.join(plot_dir, f"{scale_tag}x_{suffix}_{base_name}.png")
         plt.savefig(out1, dpi=200, bbox_inches="tight")
         print(f"[OK] Saved figure: {out1}")
 
-    # 1) V_in (soma.v, intracellular)
-    draw_fig(
-        y=derived["V_in_soma_mV"],
-        ylabel="V_in (soma.v, mV)",
-        title="V_in (soma.v, intracellular) for 4 positions",
-        suffix="V_in",
-    )
-
-    # 2) V_ext (soma.vext[0], extracellular)
-    draw_fig(
-        y=derived["V_ext_soma_mV"],
-        ylabel="V_ext (soma.vext[0], mV)",
-        title="V_ext (soma.vext[0], extracellular) for 4 positions",
-        suffix="V_ext",
-    )
+    # TEMP: per request, disable V_in / V_ext plot+save.
+    # draw_fig(
+    #     y=derived["V_in_soma_mV"],
+    #     ylabel="V_in (soma.v, mV)",
+    #     title="V_in (soma.v, intracellular) for 4 positions",
+    #     suffix="V_in",
+    # )
+    #
+    # draw_fig(
+    #     y=derived["V_ext_soma_mV"],
+    #     ylabel="V_ext (soma.vext[0], mV)",
+    #     title="V_ext (soma.vext[0], extracellular) for 4 positions",
+    #     suffix="V_ext",
+    # )
 
     # 3) V_m = V_in - V_ext (membrane)
     draw_fig(
@@ -326,6 +440,12 @@ def plot_results(
 
 def main() -> None:
     ap = argparse.ArgumentParser()
+    ap.add_argument(
+        "scale",
+        nargs="?",
+        default=None,
+        help="Optional scale to load. If omitted, all simulate_four_v2 outputs are processed.",
+    )
     ap.add_argument("--latest", action="store_true", help="Load the newest .npy in ./output by modified time.")
     ap.add_argument("--file", type=str, default=None, help="Path to a specific .npy file.")
     ap.add_argument("--no-plot", action="store_true", help="Run checks only, do not plot.")
@@ -335,32 +455,45 @@ def main() -> None:
     output_dir = os.path.join(script_dir, "output")
 
     if args.file is not None:
-        path = args.file
-    else:
-        # default: latest (more user-friendly)
-        path = find_latest_npy(output_dir)
+        paths = [os.path.abspath(args.file)]
+    elif args.scale is not None:
+        target_scale = float(args.scale)
+        path = find_latest_sanity_by_scale(output_dir, target_scale)
+        if path is None and args.latest:
+            path = find_latest_npy(output_dir)
         if path is None:
-            raise FileNotFoundError(f"No .npy files found in {output_dir}")
-
-    path = os.path.abspath(path)
-    print("\nLoaded:", path)
-
-    payload = load_payload(path)
-    ok, t_ms, derived, positions_um, on_window = run_checks(payload)
-
-    if ok:
-        print("\n[OK] Basic integrity checks passed.")
+            raise FileNotFoundError(
+                f"No matched sanity .npy found in {output_dir} "
+                f"(requested scale={target_scale:g}x)."
+            )
+        paths = [os.path.abspath(path)]
     else:
-        print("\n[WARN] Integrity checks failed. 위 로그를 확인하십시오.")
+        # Default behavior requested: iterate all simulate_four_v2 outputs.
+        paths = [os.path.abspath(p) for p in find_all_simulate_four_outputs(output_dir)]
+        if not paths:
+            raise FileNotFoundError(f"No sanity .npy files found in {output_dir}")
 
-    if not args.no_plot:
-        plot_results(
-            npy_path=path,
-            t_ms=t_ms,
-            derived=derived,
-            positions_um=positions_um,
-            on_window=on_window,
-        )
+    for i, path in enumerate(paths, start=1):
+        print(f"\n[{i}/{len(paths)}] Loaded: {path}")
+
+        payload = load_payload(path)
+        efield_scale = float(payload.get("efield_scale", 1.0))
+        ok, t_ms, derived, positions_um, on_window = run_checks(payload)
+
+        if ok:
+            print("\n[OK] Basic integrity checks passed.")
+        else:
+            print("\n[WARN] Integrity checks failed. 위 로그를 확인하십시오.")
+
+        if not args.no_plot:
+            plot_results(
+                npy_path=path,
+                t_ms=t_ms,
+                derived=derived,
+                positions_um=positions_um,
+                on_window=on_window,
+                efield_scale=efield_scale,
+            )
 
     print("\nDone.")
 

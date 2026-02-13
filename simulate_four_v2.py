@@ -17,6 +17,7 @@ import os
 import re
 import math
 import time
+import argparse
 from dataclasses import dataclass
 from typing import Dict, List, Tuple, Optional
 
@@ -56,8 +57,10 @@ EFIELD_ON_T1_MS = 4.0        # apply E-field from 0 ~ 4 ms
 # Sim window (relative to 0)
 TSTOP_REL_MS = 4.0           # record a little after E-field window
 
-# E-field scale (keep 1.0 for sanity)
+# E-field scale (updated per run in scale loop)
 E_FIELD_SCALE = 1.0
+DEFAULT_EFIELD_SCALES = tuple([1.0] + [10.0 ** k for k in range(1, 13)])
+DEFAULT_SCALES_STR = ",".join(["1"] + [f"1e{k}" for k in range(1, 13)])
 
 # Conversion: (V/m * um) -> mV
 E_FACTOR = 1e-3
@@ -431,10 +434,42 @@ def gating_magnitude_report(
 # =========================
 
 def main() -> None:
+    ap = argparse.ArgumentParser()
+    ap.add_argument(
+        "--scales",
+        type=str,
+        default=DEFAULT_SCALES_STR,
+        help=f"Comma-separated E-field scale multipliers (default: {DEFAULT_SCALES_STR}).",
+    )
+    args = ap.parse_args()
+
+    if args.scales is None or str(args.scales).strip() == "":
+        parsed_scales = [float(v) for v in DEFAULT_EFIELD_SCALES]
+    else:
+        parsed_scales = []
+        for tok in str(args.scales).split(","):
+            tok = tok.strip()
+            if not tok:
+                continue
+            parsed_scales.append(float(tok))
+        if len(parsed_scales) == 0:
+            parsed_scales = [float(v) for v in DEFAULT_EFIELD_SCALES]
+
+    # Remove duplicates while preserving order.
+    scales = []
+    seen = set()
+    for s in parsed_scales:
+        key = float(s)
+        if key in seen:
+            continue
+        seen.add(key)
+        scales.append(key)
+
     print("\n=== simulate_four_A_coil_excluded.py ===")
     print("Cell ID:", CELL_ID)
     print("E-field values:", E_FIELD_VALUES_FILE)
     print("E-field grid:  ", E_GRID_COORDS_FILE)
+    print("E-field scales:", ", ".join(f"{s:g}x" for s in scales))
 
     # --- Load E-field and coords ---
     E = np.load(E_FIELD_VALUES_FILE)
@@ -520,131 +555,141 @@ def main() -> None:
     ss.save()
     print("SaveState saved.\n")
 
-    # --- Main run ---
-    print("=== Main run: restore equilibrium, apply E-field in 0~2ms ===")
-    h.dt = SIM_DT_MS * ms
-    h.tstop = TSTOP_REL_MS * ms
+    global E_FIELD_SCALE
 
-    # restore equilibrium state for whole model
-    ss.restore()
-    h.t = 0.0
-
-    # recorders
-    npos = len(POSITIONS_UM)
-    t_vec = np.zeros(int(round(TSTOP_REL_MS / SIM_DT_MS)) + 1, dtype=np.float64)
-    # Naming clarified: V_in = soma.v, V_ext = soma.vext[0]
-    V_in_soma = np.zeros((npos, t_vec.size), dtype=np.float64)
-    V_ext_soma = np.zeros((npos, t_vec.size), dtype=np.float64)
-
-    # simulation loop
-    for k in tqdm(range(t_vec.size), desc="Simulating", ncols=80):
-        t_rel = k * SIM_DT_MS
-        t_vec[k] = t_rel
-
-        # Apply E-field only within window; otherwise set e_extracellular = 0
-        if (t_rel >= EFIELD_ON_T0_MS) and (t_rel <= EFIELD_ON_T1_MS):
-            for i, neuron in enumerate(neurons):
-                phi_sec = compute_phi_sections_integrated(
-                    neuron=neuron,
-                    cache=caches[i],
-                    topo=topos[i],
-                    E=E,
-                    t_rel_ms=t_rel,
-                )
-                apply_phi_to_segments(neuron, phi_sec)
+    for scale in scales:
+        E_FIELD_SCALE = float(scale)
+        if abs(E_FIELD_SCALE - round(E_FIELD_SCALE)) < 1e-12:
+            scale_tag = str(int(round(E_FIELD_SCALE)))
         else:
-            for neuron in neurons:
-                for sec in neuron.all:
-                    for seg in sec:
-                        seg.e_extracellular = 0.0
+            scale_tag = str(E_FIELD_SCALE).rstrip("0").rstrip(".").replace(".", "p")
+        out_name = f"sanity_{scale_tag}x_cell{CELL_ID}.npy"
+        out_path = os.path.join(OUTPUT_DIR, out_name)
+        if os.path.exists(out_path):
+            print(f"\n[SKIP] Existing output found for scale={E_FIELD_SCALE:g}x: {out_path}")
+            continue
 
-        # record after applying phi, before fadvance
-        for i, neuron in enumerate(neurons):
-            # V_in: intracellular (soma.v), V_ext: extracellular (soma.vext[0])
-            V_in_soma[i, k] = float(neuron.soma(0.5).v)
-            try:
-                V_ext_soma[i, k] = float(neuron.soma(0.5).vext[0])
-            except Exception:
-                V_ext_soma[i, k] = 0.0
+        print(f"\n=== Main run: restore equilibrium, apply E-field in 0~2ms (scale={E_FIELD_SCALE:g}x) ===")
+        h.dt = SIM_DT_MS * ms
+        h.tstop = TSTOP_REL_MS * ms
 
-        # quick debug: check e_extracellular range for neuron 1 early
-        if k in (0, 1, 2):
-            e_vals = []
-            for sec in neurons[0].all:
-                for seg in sec:
-                    e_vals.append(float(seg.e_extracellular))
-            if e_vals:
-                mn, mx = float(np.min(e_vals)), float(np.max(e_vals))
-                print(f"[DEBUG k={k} t={t_rel:.6f} ms] N1 e_extracellular: min={mn:.6f} mV, max={mx:.6f} mV, range={(mx-mn):.6f} mV")
+        # restore equilibrium state for whole model
+        ss.restore()
+        h.t = 0.0
 
-            print(f"[DEBUG k={k} t={t_rel:.6f} ms] V_in={V_in_soma[0,k]:.6f} mV, V_ext0={V_ext_soma[0,k]:.6e} mV")
-
-        # warn if V_in is extreme
-        vmax_abs = float(np.max(np.abs(V_in_soma[:, k])))
-        if vmax_abs > VM_EXTREME_WARN_MV:
-            print(f"\n[WARN] Extreme |V_in| detected at k={k}, t={t_rel:.6f} ms (max|V_in|={vmax_abs:.3f} mV).")
-            print("       코일 제외 매핑이 0%인지, 그리고 E-field max|E|를 확인하십시오.\n")
-
-        # advance
-        if k < t_vec.size - 1:
-            h.fadvance()
-
-    # --- Save output ---
-    ts = time.strftime("%Y%m%d_%H%M%S")
-    out_name = f"sanity_cell{CELL_ID}_4pos_integrated_coilexcl_efield0to2ms_dt{SIM_DT_MS:.3f}ms_{ts}.npy"
-    out_path = os.path.join(OUTPUT_DIR, out_name)
-
-    payload = {
-        "cell_id": CELL_ID,
-        "positions_um": np.array(POSITIONS_UM, dtype=np.float64),
-        "coil_box_um": COIL_BOX_UM,
-        "efield_values_file": E_FIELD_VALUES_FILE,
-        "efield_grid_file": E_GRID_COORDS_FILE,
-        "efield_dt_ms": EFIELD_DT_MS,
-        "sim_dt_ms": SIM_DT_MS,
-        "efield_scale": E_FIELD_SCALE,
-        "efield_on_window_ms": (EFIELD_ON_T0_MS, EFIELD_ON_T1_MS),
-        "t_ms": t_vec,
+        # recorders
+        npos = len(POSITIONS_UM)
+        t_vec = np.zeros(int(round(TSTOP_REL_MS / SIM_DT_MS)) + 1, dtype=np.float64)
         # Naming clarified: V_in = soma.v, V_ext = soma.vext[0]
-        "V_in_soma_mV": V_in_soma,
-        "V_ext_soma_mV": V_ext_soma,
-    }
-    np.save(out_path, payload)
-    print(f"\nSaved: {out_path}")
+        V_in_soma = np.zeros((npos, t_vec.size), dtype=np.float64)
+        V_ext_soma = np.zeros((npos, t_vec.size), dtype=np.float64)
 
-    # --- Basic integrity checks + report (no plotting) ---
-    print("\n=== Basic integrity checks ===")
-    ok = True
-    ok &= check_arrays_finite("t_ms", t_vec)
-    ok &= check_arrays_finite("V_in_soma_mV", V_in_soma)
-    ok &= check_arrays_finite("V_ext_soma_mV", V_ext_soma)
-    if V_in_soma.shape[1] != t_vec.size:
-        print("[FAIL] V_in time dimension mismatch.")
-        ok = False
-    else:
-        print("[OK]   V_in time dimension matches t length.")
+        # simulation loop
+        for k in tqdm(range(t_vec.size), desc=f"Simulating ({E_FIELD_SCALE:g}x)", ncols=80):
+            t_rel = k * SIM_DT_MS
+            t_vec[k] = t_rel
 
-    gating_magnitude_report(
-        t_ms=t_vec,
-        Vm=V_in_soma,   # interpret as V_in here
-        Vext=V_ext_soma,
-        positions_um=POSITIONS_UM,
-        on0=EFIELD_ON_T0_MS,
-        on1=EFIELD_ON_T1_MS,
-    )
+            # Apply E-field only within window; otherwise set e_extracellular = 0
+            if (t_rel >= EFIELD_ON_T0_MS) and (t_rel <= EFIELD_ON_T1_MS):
+                for i, neuron in enumerate(neurons):
+                    phi_sec = compute_phi_sections_integrated(
+                        neuron=neuron,
+                        cache=caches[i],
+                        topo=topos[i],
+                        E=E,
+                        t_rel_ms=t_rel,
+                    )
+                    apply_phi_to_segments(neuron, phi_sec)
+            else:
+                for neuron in neurons:
+                    for sec in neuron.all:
+                        for seg in sec:
+                            seg.e_extracellular = 0.0
 
-    print("\n=== Quick absolute range summary ===")
-    for i, pos in enumerate(POSITIONS_UM):
-        v = V_in_soma[i]
-        ve = V_ext_soma[i]
-        print(f"Neuron {i+1} @ ({pos[0]:.1f},{pos[1]:.1f},{pos[2]:.1f}): "
-              f"min(V_in)={np.min(v):.6f}, max(V_in)={np.max(v):.6f}, max|V_in|={np.max(np.abs(v)):.6f} mV")
-        print(f"          min(V_ext)={np.min(ve):.6f}, max(V_ext)={np.max(ve):.6f}, max|V_ext|={np.max(np.abs(ve)):.6f} mV")
+            # record after applying phi, before fadvance
+            for i, neuron in enumerate(neurons):
+                # V_in: intracellular (soma.v), V_ext: extracellular (soma.vext[0])
+                V_in_soma[i, k] = float(neuron.soma(0.5).v)
+                try:
+                    V_ext_soma[i, k] = float(neuron.soma(0.5).vext[0])
+                except Exception:
+                    V_ext_soma[i, k] = 0.0
 
-    if ok:
-        print("\n[OK] Basic integrity checks passed.")
-    else:
-        print("\n[WARN] Integrity checks failed. 위 로그를 확인하십시오.")
+            # quick debug: check e_extracellular range for neuron 1 early
+            if k in (0, 1, 2):
+                e_vals = []
+                for sec in neurons[0].all:
+                    for seg in sec:
+                        e_vals.append(float(seg.e_extracellular))
+                if e_vals:
+                    mn, mx = float(np.min(e_vals)), float(np.max(e_vals))
+                    print(f"[DEBUG k={k} t={t_rel:.6f} ms] N1 e_extracellular: min={mn:.6f} mV, max={mx:.6f} mV, range={(mx-mn):.6f} mV")
+
+                print(f"[DEBUG k={k} t={t_rel:.6f} ms] V_in={V_in_soma[0,k]:.6f} mV, V_ext0={V_ext_soma[0,k]:.6e} mV")
+
+            # warn if V_in is extreme
+            vmax_abs = float(np.max(np.abs(V_in_soma[:, k])))
+            if vmax_abs > VM_EXTREME_WARN_MV:
+                print(f"\n[WARN] Extreme |V_in| detected at k={k}, t={t_rel:.6f} ms (max|V_in|={vmax_abs:.3f} mV).")
+                print("       코일 제외 매핑이 0%인지, 그리고 E-field max|E|를 확인하십시오.\n")
+
+            # advance
+            if k < t_vec.size - 1:
+                h.fadvance()
+
+        # --- Save output ---
+
+        payload = {
+            "cell_id": CELL_ID,
+            "positions_um": np.array(POSITIONS_UM, dtype=np.float64),
+            "coil_box_um": COIL_BOX_UM,
+            "efield_values_file": E_FIELD_VALUES_FILE,
+            "efield_grid_file": E_GRID_COORDS_FILE,
+            "efield_dt_ms": EFIELD_DT_MS,
+            "sim_dt_ms": SIM_DT_MS,
+            "efield_scale": E_FIELD_SCALE,
+            "efield_on_window_ms": (EFIELD_ON_T0_MS, EFIELD_ON_T1_MS),
+            "t_ms": t_vec,
+            # Naming clarified: V_in = soma.v, V_ext = soma.vext[0]
+            "V_in_soma_mV": V_in_soma,
+            "V_ext_soma_mV": V_ext_soma,
+        }
+        np.save(out_path, payload)
+        print(f"\nSaved: {out_path}")
+
+        # --- Basic integrity checks + report (no plotting) ---
+        print("\n=== Basic integrity checks ===")
+        ok = True
+        ok &= check_arrays_finite("t_ms", t_vec)
+        ok &= check_arrays_finite("V_in_soma_mV", V_in_soma)
+        ok &= check_arrays_finite("V_ext_soma_mV", V_ext_soma)
+        if V_in_soma.shape[1] != t_vec.size:
+            print("[FAIL] V_in time dimension mismatch.")
+            ok = False
+        else:
+            print("[OK]   V_in time dimension matches t length.")
+
+        gating_magnitude_report(
+            t_ms=t_vec,
+            Vm=V_in_soma,   # interpret as V_in here
+            Vext=V_ext_soma,
+            positions_um=POSITIONS_UM,
+            on0=EFIELD_ON_T0_MS,
+            on1=EFIELD_ON_T1_MS,
+        )
+
+        print("\n=== Quick absolute range summary ===")
+        for i, pos in enumerate(POSITIONS_UM):
+            v = V_in_soma[i]
+            ve = V_ext_soma[i]
+            print(f"Neuron {i+1} @ ({pos[0]:.1f},{pos[1]:.1f},{pos[2]:.1f}): "
+                  f"min(V_in)={np.min(v):.6f}, max(V_in)={np.max(v):.6f}, max|V_in|={np.max(np.abs(v)):.6f} mV")
+            print(f"          min(V_ext)={np.min(ve):.6f}, max(V_ext)={np.max(ve):.6f}, max|V_ext|={np.max(np.abs(ve)):.6f} mV")
+
+        if ok:
+            print("\n[OK] Basic integrity checks passed.")
+        else:
+            print("\n[WARN] Integrity checks failed. 위 로그를 확인하십시오.")
 
     print("\nDone.")
 

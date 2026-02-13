@@ -17,7 +17,12 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 ALLEN_MODEL_DIR = os.path.join(SCRIPT_DIR, 'allen_model')
 
 # --- 2. Ephys 파라미터 추출 함수 ---
-def load_ephys_params(data_dir):
+def _env_flag_true(name: str) -> bool:
+    v = os.environ.get(name, "")
+    return str(v).strip().lower() in ("1", "true", "yes", "y", "on")
+
+
+def load_ephys_params(data_dir, verbose: bool = True):
     """
     fit_parameters.json 파일에서 ephys 파라미터를 로드합니다.
     
@@ -96,17 +101,20 @@ def load_ephys_params(data_dir):
             if 'genome' in fit_params:
                 params['genome'] = fit_params['genome']
             
-            print(f"Ephys 파라미터 로드 완료: {os.path.basename(fit_params_file)}")
-            print(f"  vrest: {params['vrest']:.2f} mV")
-            print(f"  ra: {params['ra']:.2f} Ohm-cm")
-            print(f"  celsius: {params['celsius']:.1f} C")
+            if verbose:
+                print(f"Ephys parameters loaded: {os.path.basename(fit_params_file)}")
+                print(f"  vrest: {params['vrest']:.2f} mV")
+                print(f"  ra: {params['ra']:.2f} Ohm-cm")
+                print(f"  celsius: {params['celsius']:.1f} C")
             return params
         except Exception as e:
-            print(f"경고: fit_parameters.json 읽기 실패, 기본값 사용: {e}")
+            # Always show this warning; it indicates a real configuration issue.
+            print(f"WARNING: Failed to read fit_parameters.json; using defaults. Error: {e}")
             import traceback
             traceback.print_exc()
     
-    print("기본 ephys 파라미터 사용")
+    if verbose:
+        print("Using default ephys parameters")
     return params
 
 # --- 3. SWC 파일 파싱 함수 ---
@@ -168,7 +176,7 @@ def parse_swc(swc_file):
 
 # --- 4. Allen Neuron 모델 클래스 ---
 class AllenNeuronModel:
-    def __init__(self, x=0, y=0, z=0, cell_id=None, data_dir=None):
+    def __init__(self, x=0, y=0, z=0, cell_id=None, data_dir=None, verbose=None):
         """
         Allen Brain Atlas 뉴런 모델을 생성합니다.
         
@@ -180,6 +188,10 @@ class AllenNeuronModel:
         Raises:
             FileNotFoundError: 데이터 폴더나 필수 파일을 찾을 수 없을 때
         """
+        if verbose is None:
+            # Default verbosity can be controlled via environment variable.
+            verbose = (not _env_flag_true("ALLEN_NEURON_QUIET"))
+
         # data_dir이 지정되면 직접 사용
         if data_dir:
             if not os.path.exists(data_dir):
@@ -200,7 +212,8 @@ class AllenNeuronModel:
             
             # 여러 개가 있으면 첫 번째 사용
             model_data_dir = matching_dirs[0]
-            print(f"Allen 데이터 폴더: {os.path.basename(model_data_dir)}")
+            if verbose:
+                print(f"Allen model dir: {os.path.basename(model_data_dir)}")
         else:
             raise ValueError("cell_id 또는 data_dir 중 하나를 지정해야 합니다.")
         
@@ -215,10 +228,11 @@ class AllenNeuronModel:
         else:
             swc_file = os.path.join(model_data_dir, swc_files[0])
         
-        print(f"SWC 파일: {os.path.basename(swc_file)}")
+        if verbose:
+            print(f"SWC file: {os.path.basename(swc_file)}")
         
         # Ephys 파라미터 로드
-        self.ephys_params = load_ephys_params(model_data_dir)
+        self.ephys_params = load_ephys_params(model_data_dir, verbose=bool(verbose))
         
         # SWC 파일 로드
         self.morphology = parse_swc(swc_file)
