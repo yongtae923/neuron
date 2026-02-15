@@ -77,7 +77,8 @@ EFIELD_ON_T1_MS = 4.0
 TSTOP_REL_MS = 4.0
 
 # Default E-field scales for repeated runs
-DEFAULT_EFIELD_SCALES = (5.0, 10.0, 20.0)
+# requested: 1x, 10e7x, 10e8x, 10e9x
+DEFAULT_EFIELD_SCALES = (1.0, 10e7, 10e8, 10e9)
 
 # Conversion: (V/m * um) -> mV
 E_FACTOR = 1e-3
@@ -595,8 +596,8 @@ def main() -> None:
     ap.add_argument(
         "--scales",
         type=str,
-        default="5,10,20",
-        help="Comma-separated E-field scale multipliers (default: 5,10,20).",
+        default="1,10e7,10e8,10e9",
+        help="Comma-separated E-field scale multipliers (default: 1,10e7,10e8,10e9).",
     )
     ap.add_argument("--keep_tmp", action="store_true", help="Keep temp worker files.")
     args = ap.parse_args()
@@ -760,9 +761,11 @@ def main() -> None:
                 vm_min[row] = vmin_c[j]
                 spike_count[row] = sc_c[j]
 
-        ts = time.strftime("%Y%m%d_%H%M%S")
-        scale_tag = str(efield_scale).replace(".", "p")
-        out_name = f"allpoints_cell{CELL_ID}_outsideOnly_integrated_mp_summary_fast_scale{scale_tag}x_{ts}.npy"
+        if abs(float(efield_scale) - round(float(efield_scale))) < 1e-12:
+            scale_tag = str(int(round(float(efield_scale))))
+        else:
+            scale_tag = str(float(efield_scale)).rstrip("0").rstrip(".").replace(".", "p")
+        out_name = f"allpoints_{scale_tag}x_cell{CELL_ID}.npy"
         out_path = os.path.join(OUTPUT_DIR, out_name)
 
         final_payload: Dict[str, Any] = {
