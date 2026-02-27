@@ -2,6 +2,7 @@
 efield/
 efield_npy/
 output/
+data/
 
 # Allen Brain Atlas cell models (SWC + mod files, ~several MB per cell)
 allen_model/
@@ -44,3 +45,4 @@ venv.bak/
 # OS
 .DS_Store
 Thumbs.db
+
