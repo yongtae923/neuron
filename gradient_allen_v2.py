@@ -26,6 +26,8 @@ Output (summary only):
 
 from __future__ import annotations
 
+# pyright: reportGeneralTypeIssues=false, reportMissingImports=false, reportMissingModuleSource=false
+
 import os
 import re
 import math
@@ -33,7 +35,7 @@ import time
 import argparse
 import shutil
 from dataclasses import dataclass
-from typing import Dict, List, Tuple, Optional, Any, Set
+from typing import Dict, List, Tuple, Optional, Any, Set, TYPE_CHECKING, cast
 
 import warnings
 
@@ -44,15 +46,22 @@ warnings.filterwarnings(
 )
 
 import numpy as np
-from scipy.spatial import cKDTree
+from scipy.spatial import cKDTree  # type: ignore[reportMissingImports]
 from tqdm import tqdm
+
+if TYPE_CHECKING:  # 타입 체커 전용: 실제 시그니처는 무시
+    from model_allen_neuron import AllenNeuronModel as AllenNeuronModelRuntime
+    AllenNeuronModel_t = AllenNeuronModelRuntime
+else:
+    from model_allen_neuron import AllenNeuronModel as AllenNeuronModelRuntime
+    AllenNeuronModel_t = Any  # 런타임에서는 Any 로 취급하여 타입 경고 방지
 
 
 # =========================
 # Config (default)
 # =========================
 
-CELL_IDS = ("529898751", "529889679", "626170547")
+CELL_IDS = ("529898751", "529889679", "626170547", "497232735")
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -212,9 +221,9 @@ def worker_run(
         category=UserWarning,
     )
 
-    from neuron import h
-    from neuron.units import ms, mV
-    from model_allen_neuron import AllenNeuronModel
+    from neuron import h  # type: ignore[reportMissingImports]
+    from neuron.units import ms, mV  # type: ignore[reportMissingImports]
+    AllenNeuronModel: Any = AllenNeuronModelRuntime  # type: ignore[assignment]
 
     def coil_inside_mask(coords_um: np.ndarray) -> np.ndarray:
         x = coords_um[:, 0]
@@ -279,7 +288,7 @@ def worker_run(
         w = (target_arc - a0) / (a1 - a0)
         return p0 + w * (p1 - p0)
 
-    def snapshot_pt3d(neuron: AllenNeuronModel) -> Dict[Any, Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]]:
+    def snapshot_pt3d(neuron) -> Dict[Any, Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]]:
         snap: Dict[Any, Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]] = {}
         for sec in neuron.all:
             n = int(h.n3d(sec=sec))
@@ -290,7 +299,7 @@ def worker_run(
             snap[sec] = (xs, ys, zs, ds)
         return snap
 
-    def restore_pt3d(neuron: AllenNeuronModel, snap: Dict[Any, Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]]) -> None:
+    def restore_pt3d(neuron, snap: Dict[Any, Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]]) -> None:
         for sec in neuron.all:
             xs, ys, zs, ds = snap[sec]
             n = int(h.n3d(sec=sec))
@@ -339,7 +348,7 @@ def worker_run(
 
         return cache
 
-    def build_topology_map(neuron: AllenNeuronModel) -> Dict[Any, Optional[Tuple[Any, float]]]:
+    def build_topology_map(neuron) -> Dict[Any, Optional[Tuple[Any, float]]]:
         topo: Dict[Any, Optional[Tuple[Any, float]]] = {}
         for sec in neuron.all:
             sref = h.SectionRef(sec=sec)
@@ -354,7 +363,7 @@ def worker_run(
         return topo
 
     def select_sections_by_depth(
-        neuron: AllenNeuronModel,
+        neuron,
         topo: Dict[Any, Optional[Tuple[Any, float]]],
         max_depth: int,
     ) -> Set[Any]:
@@ -522,7 +531,7 @@ def worker_run(
     out_to_all = np.flatnonzero(outside)
     tree_out = cKDTree(coords_out_um)
 
-    neuron = AllenNeuronModel(x=0.0, y=0.0, z=0.0, cell_id=cell_id, verbose=False)
+    neuron = AllenNeuronModel_t(x=0.0, y=0.0, z=0.0, cell_id=cell_id, verbose=False)  # type: ignore[call-arg]
     sx, sy, sz = xyz_at_seg_linear(neuron.soma, 0.5)
     translate_morphology(neuron.all, -sx, -sy, -sz)
     base_snap = snapshot_pt3d(neuron)
@@ -608,9 +617,9 @@ def worker_run(
                     g_active = False
                     last_gi = -1
 
-            vin = float(neuron.soma(0.5).v)
+            vin = float(neuron.soma(0.5).v)  # type: ignore[call-arg]
             try:
-                vext = float(neuron.soma(0.5).vext[0])
+                vext = float(neuron.soma(0.5).vext[0])  # type: ignore[call-arg]
             except Exception:
                 vext = 0.0
             vm = vin - vext
@@ -657,7 +666,7 @@ def worker_run(
         "subset_depth": int(subset_depth),
         "subset_sections_count": int(len(secs_subset_base)),
     }
-    np.save(tmp_path, tmp_payload)
+    np.save(tmp_path, np.array(tmp_payload, dtype=object))
     return tmp_path
 
 
@@ -825,7 +834,7 @@ def _run_for_cell(
             "elapsed_seconds": float(elapsed),
         }
 
-        np.save(out_path, final_payload)
+        np.save(out_path, np.array(final_payload, dtype=object))
         print(f"\nSaved: {out_path}", flush=True)
         print("\n=== Summary ===", flush=True)
         print(f"Cell: {cell_id}, N points: {npos}", flush=True)

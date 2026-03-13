@@ -209,6 +209,13 @@ def _safe_step(axis_vals: np.ndarray) -> float:
     return float(np.min(diffs))
 
 
+def _voxel_volume_um3(xu: np.ndarray, yu: np.ndarray, zu: np.ndarray) -> float:
+    dx = _safe_step(xu)
+    dy = _safe_step(yu)
+    dz = _safe_step(zu)
+    return float(dx * dy * dz)
+
+
 def _finite_minmax(vol: np.ndarray) -> Tuple[float, float]:
     finite = vol[np.isfinite(vol)]
     if finite.size == 0:
@@ -266,6 +273,7 @@ def show_interactive(dataset_items: List[Tuple[str, Path, dict]]) -> None:
         if xu_ref is None:
             xu_ref, yu_ref, zu_ref = xu, yu, zu
         else:
+            assert xu_ref is not None and yu_ref is not None and zu_ref is not None
             if not (np.array_equal(xu_ref, xu) and np.array_equal(yu_ref, yu) and np.array_equal(zu_ref, zu)):
                 raise ValueError("All datasets must share the same spatial grid to switch by radio.")
 
@@ -296,6 +304,7 @@ def show_interactive(dataset_items: List[Tuple[str, Path, dict]]) -> None:
         t_max_all = max(t_max_all, t_max)
         t_step_all = min(t_step_all, t_step)
 
+    assert xu_ref is not None and yu_ref is not None and zu_ref is not None
     xu = xu_ref
     yu = yu_ref
     zu = zu_ref
@@ -349,23 +358,23 @@ def show_interactive(dataset_items: List[Tuple[str, Path, dict]]) -> None:
 
     info_pos = ax_info.get_position()
     metric_ax = fig.add_axes(
-        [
+        (
             info_pos.x0 + 0.05 * info_pos.width,
             info_pos.y0 + 0.78 * info_pos.height,
             0.90 * info_pos.width,
             0.19 * info_pos.height,
-        ]
+        )
     )
     metric_radio = RadioButtons(metric_ax, metric_names, active=metric_names.index(init_metric))
     metric_ax.set_title("Metric", fontsize=10, pad=2)
 
     dataset_ax = fig.add_axes(
-        [
+        (
             info_pos.x0 + 0.05 * info_pos.width,
             info_pos.y0 + 0.52 * info_pos.height,
             0.90 * info_pos.width,
             0.23 * info_pos.height,
-        ]
+        )
     )
     dataset_radio = RadioButtons(dataset_ax, labels, active=0)
     dataset_ax.set_title("Dataset", fontsize=10, pad=2)
@@ -415,6 +424,10 @@ def show_interactive(dataset_items: List[Tuple[str, Path, dict]]) -> None:
         mn_zx, mx_zx = mm(zx)
 
         ds = datasets[label]
+        voxel_um3 = _voxel_volume_um3(xu, yu, zu)
+        activated_count = int(np.sum(np.isfinite(vol) & (vol > 0.0)))
+        activated_um3 = float(activated_count) * voxel_um3
+
         lines = [
             f"dataset: {label}",
             f"file: {ds['path'].name}",
@@ -424,6 +437,22 @@ def show_interactive(dataset_items: List[Tuple[str, Path, dict]]) -> None:
         ]
         if metric in ("vm_by_t", "spike_on"):
             lines.append(f"t = {float(t_sl.val):.3f} ms")
+        if metric == "spike_on":
+            lines.extend(
+                [
+                    f"activated grid points (Vm>0): {activated_count}",
+                    f"activated volume: {activated_um3:.6g} um^3",
+                ]
+            )
+        if metric == "spike_count":
+            spk_count = int(np.sum(np.isfinite(vol) & (vol > 0.0)))
+            spk_um3 = float(spk_count) * voxel_um3
+            lines.extend(
+                [
+                    f"spiking grid points (count>0): {spk_count}",
+                    f"spiking volume: {spk_um3:.6g} um^3",
+                ]
+            )
         lines.extend([
             "",
             f"global min  : {gmin: .6g}",
