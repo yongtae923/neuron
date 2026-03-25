@@ -1,506 +1,638 @@
-# 1_extract_xyz.py
+# 1extract_xyz.py
 """
-Ansys E-field 데이터 추출 및 검증 스크립트
+Ex, Ey, Ez txt 스택을 하나의 5차원 배열로 묶어 저장하고, 저장된 파일이 있으면 그것을 바로 로드해서 플롯을 보여주는 스크립트입니다.
 
-사용 예:
-    cd D:\yongtae\neuron\
-    conda activate neuronconda
-    python .\code\1_extract_xyz.py
-
-기능:
-1. Ex, Ey, Ez 폴더에서 N사이클 데이터 로드 (1사이클=201개 파일, 10ms/50us)
-2. 좌표 추출 (X, Y, Z)
-3. E-field 값 추출 및 NumPy 배열로 저장
-4. 데이터 무결성 검증
+입력:
+- D:\yongtae\neuron\efield\400us_50Hz_10umspaing_100mA\400us_50Hz_10umspaing_100mA_Ex
+- D:\yongtae\neuron\efield\400us_50Hz_10umspaing_100mA\400us_50Hz_10umspaing_100mA_Ey
+- D:\yongtae\neuron\efield\400us_50Hz_10umspaing_100mA\400us_50Hz_10umspaing_100mA_Ez
 
 출력:
-- E_field_Ncycle.npy: Shape (3, N_spatial, N_steps) - Ex, Ey, Ez 성분
-- E_field_grid_coords.npy: Shape (N_spatial, 3) - X, Y, Z 좌표
+- D:\yongtae\neuron\efield\400us_50Hz_10umspaing_100mA\1extract_output.npy
+- D:\yongtae\neuron\efield\400us_50Hz_10umspaing_100mA\1extract_output.npz
+
+배열 형식:
+- E.shape = (T, X, Y, Z, 3)
+- 마지막 축 3개는 순서대로 Ex, Ey, Ez 입니다.
+- 즉 E[t, x, y, z, 0] = Ex
+     E[t, x, y, z, 1] = Ey
+     E[t, x, y, z, 2] = Ez
+
+동작:
+- 출력 파일이 이미 있으면 바로 로드해서 플롯만 보여줍니다.
+- 출력 파일이 없으면 txt를 읽어 npy/npz를 저장한 뒤 플롯을 보여줍니다.
+
+플롯:
+- matplotlib 슬라이더로 시간 t, x, y, z를 바꿀 수 있습니다.
+- 표시 모드는 Ex, Ey, Ez, |E| 중에서 라디오 버튼으로 선택할 수 있습니다.
+- XY, XZ, YZ 슬라이스를 동시에 보여줍니다.
+- 플롯에서만 코일 interior와 1-voxel outside shell을 NaN 처리해 흰색으로 숨깁니다.
+- 컬러바 기준 계산에서도 코일 숨김 영역 값은 제외합니다.
+- 시간 슬라이더는 실제 시간값 기준으로 0 ~ 50 us 범위만 사용합니다.
 """
 
-import warnings
-warnings.filterwarnings('ignore', category=UserWarning, module='numpy')
+from __future__ import annotations
+
+import math
+import re
+from pathlib import Path
 
 import numpy as np
-import pandas as pd
-import os
-import glob
-import json
-from pathlib import Path
-from tqdm import tqdm
-from multiprocessing import Pool, cpu_count
-
-# --- 1. 경로 및 상수 설정 ---
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-BASE_DIR = os.path.dirname(SCRIPT_DIR)  # D:\yongtae\neuron
-
-# E-field 폴더 경로 (efield 디렉토리 내)
-EFIELD_BASE_DIR = os.path.join(BASE_DIR, "efield")
-
-# Available folders (uncomment the one to process)
-# FOLDER_NAME = "800us_50Hz_10umspaing_100mA"  # 주석 처리: 600us 폴더
-FOLDER_NAME = "800us_50Hz_10umspaing_100mA"  # 활성화: 800us 폴더
-
-EX_DIR = os.path.join(EFIELD_BASE_DIR, FOLDER_NAME, f"{FOLDER_NAME}_Ex")
-EY_DIR = os.path.join(EFIELD_BASE_DIR, FOLDER_NAME, f"{FOLDER_NAME}_Ey")
-EZ_DIR = os.path.join(EFIELD_BASE_DIR, FOLDER_NAME, f"{FOLDER_NAME}_Ez")
-
-# --- Cycle 설정 ---
-NUM_CYCLES = 2  # 추출할 사이클 수 (1사이클 반복 수)
-STEPS_PER_CYCLE = 401  # 기본: 1사이클당 파일 개수 (001.txt ~ 401.txt)
-TOTAL_STEPS = STEPS_PER_CYCLE * NUM_CYCLES  # 총 시간 스텝 수
-
-# (Note) 실제 파일 수가 401이 아닌 경우에 대비하여 자동 조정됨
-
-# 출력 파일 경로 (efield/FOLDER_NAME 폴더에 저장)
-OUTPUT_DIR = os.path.join(EFIELD_BASE_DIR, FOLDER_NAME)
-OUTPUT_E_FIELD_FILE = os.path.join(OUTPUT_DIR, f"E_field_{NUM_CYCLES}cycle.npy")
-OUTPUT_COORDS_FILE = os.path.join(OUTPUT_DIR, "E_field_grid_coords.npy")
-
-# 상수
-BATCH_SIZE = 10  # 배치 단위로 처리할 파일 개수 (체크포인트용)
-
-# 멀티프로세싱 설정: 30개 코어 사용
-NUM_WORKERS = 30
-print(f"사용 코어: {NUM_WORKERS}개")
-
-# 임시 파일 및 체크포인트 디렉토리
-TEMP_DIR = os.path.join(EFIELD_BASE_DIR, "_temp_extract")
-os.makedirs(TEMP_DIR, exist_ok=True)
-
-print("=" * 60)
-print("E-field 데이터 추출 및 검증 스크립트")
-print("=" * 60)
-print(f"\n사이클 설정: {NUM_CYCLES} cycle(s), {STEPS_PER_CYCLE} steps/cycle → 총 {TOTAL_STEPS} time steps")
-print(f"기준 디렉토리: {BASE_DIR}")
-print(f"Ex 경로: {EX_DIR}")
-print(f"Ey 경로: {EY_DIR}")
-print(f"Ez 경로: {EZ_DIR}")
-print(f"출력 파일 (E-field): {OUTPUT_E_FIELD_FILE}")
-print(f"출력 파일 (좌표): {OUTPUT_COORDS_FILE}")
-
-# -- 자동 파일 개수 감지 (401 또는 201 등)
-all_files = sorted(glob.glob(os.path.join(EX_DIR, "*.txt")))
-if len(all_files) == 0:
-    raise FileNotFoundError(f"Ex 폴더에 txt 파일이 없습니다: {EX_DIR}")
-auto_steps = len(all_files)
-if auto_steps != STEPS_PER_CYCLE:
-    print(f"경고: 설정보다 다른 파일 개수 감지됨: STEPS_PER_CYCLE={STEPS_PER_CYCLE}, 감지={auto_steps}. 자동으로 적용합니다.")
-    STEPS_PER_CYCLE = auto_steps
-    TOTAL_STEPS = STEPS_PER_CYCLE * NUM_CYCLES
-    OUTPUT_E_FIELD_FILE = os.path.join(OUTPUT_DIR, f"E_field_{NUM_CYCLES}cycle.npy")
-
-print(f"감지된 1사이클 파일 수: {STEPS_PER_CYCLE}, 총 시간 스텝: {TOTAL_STEPS}")
-
-# 디렉토리 존재 확인
-for dir_name, dir_path in [("Ex", EX_DIR), ("Ey", EY_DIR), ("Ez", EZ_DIR)]:
-    if not os.path.exists(dir_path):
-        raise FileNotFoundError(f"오류: {dir_name} 디렉토리를 찾을 수 없습니다: {dir_path}")
+import matplotlib.pyplot as plt
+from matplotlib.widgets import Slider, Button, RadioButtons
 
 
-# --- 2. 체크포인트 관리 함수 ---
-def get_checkpoint_path(component_name):
-    """체크포인트 파일 경로 반환"""
-    return os.path.join(TEMP_DIR, f"checkpoint_{component_name}.json")
+# =========================
+# 사용자 설정
+# =========================
+BASE_DIR = Path(r"D:\yongtae\neuron\efield\400us_50Hz_10umspaing_100mA")
 
-def load_checkpoint(component_name):
-    """체크포인트 로드 (처리된 배치 인덱스 리스트 반환)"""
-    checkpoint_path = get_checkpoint_path(component_name)
-    if os.path.exists(checkpoint_path):
-        with open(checkpoint_path, 'r') as f:
-            data = json.load(f)
-            return data.get('processed_batches', [])
-    return []
+EX_DIR = BASE_DIR / "400us_50Hz_10umspaing_100mA_Ex"
+EY_DIR = BASE_DIR / "400us_50Hz_10umspaing_100mA_Ey"
+EZ_DIR = BASE_DIR / "400us_50Hz_10umspaing_100mA_Ez"
 
-def save_checkpoint(component_name, processed_batches):
-    """체크포인트 저장"""
-    checkpoint_path = get_checkpoint_path(component_name)
-    with open(checkpoint_path, 'w') as f:
-        json.dump({'processed_batches': processed_batches}, f)
+OUTPUT_NPY = BASE_DIR / "1extract_output.npy"
+OUTPUT_NPZ = BASE_DIR / "1extract_output.npz"
 
-def get_batch_file_path(component_name, batch_idx):
-    """배치 임시 파일 경로 반환"""
-    return os.path.join(TEMP_DIR, f"{component_name}_batch_{batch_idx:03d}.npy")
+TXT_GLOB = "*.txt"
+DT_US = 5.0
+DTYPE = np.float32
+GRID_STEP_UM = 5.0
 
-def clear_checkpoint(component_name):
-    """체크포인트 및 임시 파일 삭제"""
-    checkpoint_path = get_checkpoint_path(component_name)
-    if os.path.exists(checkpoint_path):
-        os.remove(checkpoint_path)
-    
-    # 해당 성분의 모든 배치 파일 삭제
-    pattern = os.path.join(TEMP_DIR, f"{component_name}_batch_*.npy")
-    for batch_file in glob.glob(pattern):
-        os.remove(batch_file)
+COMPONENT_ORDER = ("Ex", "Ey", "Ez")
+
+# 기존 왼쪽 코일 형상만 기준으로 사용
+# 이후 오른쪽은 이 왼쪽 형상을 x축 대칭으로 자동 생성
+LEFT_COIL_RAW_XZ_UM = np.array([
+    [-45.0, 800.0],
+    [-45.0, 590.0],
+    [-5.0, 500.0],
+    [-5.0, 800.0],
+], dtype=np.float64)
+
+COIL_Y_RAW_UM = (-6.25, 11.75)
+
+HEADER_GRID_RE = re.compile(
+    r"Grid Output Min:\s*\[([^\]]+)\]\s*Max:\s*\[([^\]]+)\]\s*Grid Size:\s*\[([^\]]+)\]"
+)
 
 
-# --- 3. 워커 함수 (멀티프로세싱용) ---
-def read_single_file(args):
+def natural_key(path: Path):
+    m = re.search(r"(\d+)", path.stem)
+    return int(m.group(1)) if m else path.stem
+
+
+def parse_um_triplet(text: str) -> np.ndarray:
+    parts = text.strip().split()
+    vals = []
+    for p in parts:
+        p = p.strip()
+        if p.endswith("um"):
+            p = p[:-2]
+        vals.append(float(p))
+    if len(vals) != 3:
+        raise ValueError(f"3개 값이 아니어서 해석할 수 없습니다: {text}")
+    return np.array(vals, dtype=np.float64)
+
+
+def parse_header(lines: list[str]):
+    grid_line_idx = None
+    for i, line in enumerate(lines[:20]):
+        if line.startswith("Grid Output Min:"):
+            grid_line_idx = i
+            break
+    if grid_line_idx is None:
+        raise ValueError("헤더에서 'Grid Output Min:' 줄을 찾지 못했습니다.")
+
+    m = HEADER_GRID_RE.search(lines[grid_line_idx])
+    if not m:
+        raise ValueError(f"그리드 헤더를 파싱하지 못했습니다:\n{lines[grid_line_idx]}")
+
+    min_um = parse_um_triplet(m.group(1))
+    max_um = parse_um_triplet(m.group(2))
+    step_um = parse_um_triplet(m.group(3))
+    data_start_idx = grid_line_idx + 2
+    return min_um, max_um, step_um, data_start_idx
+
+
+def expected_axis(min_um: float, max_um: float, step_um: float) -> np.ndarray:
+    n = int(round((max_um - min_um) / step_um)) + 1
+    return min_um + np.arange(n, dtype=np.float64) * step_um
+
+
+def outward_round_scalar_um(v: float, step_um: float = GRID_STEP_UM) -> float:
+    if v > 0:
+        return math.ceil(v / step_um) * step_um
+    if v < 0:
+        return math.floor(v / step_um) * step_um
+    return 0.0
+
+
+def outward_round_points(points_um: np.ndarray, step_um: float = GRID_STEP_UM) -> np.ndarray:
+    out = np.empty_like(points_um, dtype=np.float64)
+    for i in range(points_um.shape[0]):
+        out[i, 0] = outward_round_scalar_um(float(points_um[i, 0]), step_um)
+        out[i, 1] = outward_round_scalar_um(float(points_um[i, 1]), step_um)
+    return out
+
+
+def outward_round_interval_um(interval_um: tuple[float, float], step_um: float = GRID_STEP_UM) -> tuple[float, float]:
+    lo, hi = interval_um
+    return outward_round_scalar_um(lo, step_um), outward_round_scalar_um(hi, step_um)
+
+
+def build_surface_shell_mask(mask: np.ndarray) -> np.ndarray:
+    padded = np.pad(mask, 1, mode="constant", constant_values=False)
+    neighbor_of_mask = (
+        padded[2:, 1:-1, 1:-1]
+        | padded[:-2, 1:-1, 1:-1]
+        | padded[1:-1, 2:, 1:-1]
+        | padded[1:-1, :-2, 1:-1]
+        | padded[1:-1, 1:-1, 2:]
+        | padded[1:-1, 1:-1, :-2]
+    )
+    shell_mask = neighbor_of_mask & (~mask)
+    return shell_mask
+
+
+def _interp_x_on_left_diagonal(z_um: np.ndarray, step_um: float = GRID_STEP_UM) -> np.ndarray:
     """
-    단일 파일을 읽어서 E-field 값을 반환합니다.
-    멀티프로세싱 워커 함수로 사용됩니다.
-    
-    Args:
-        args: (file_path, file_index, num_spatial_points) 튜플
-    
-    Returns:
-        (file_index, field_values): 파일 인덱스와 E-field 값 배열
+    왼쪽 코일의 대각선 변:
+    (-5, 500) -> (-45, 590)
+    z가 500~590일 때 x_diag(z)를 반환
     """
-    file_path, file_index, num_spatial_points = args
-    try:
-        df = pd.read_csv(file_path, skiprows=2, sep=r'\s+', header=None, engine='python')
-        field_values = df.iloc[:, -1].values.astype(np.float32)
-        
-        if len(field_values) != num_spatial_points:
-            raise ValueError(
-                f"파일 {os.path.basename(file_path)}의 공간 지점 수가 일치하지 않습니다. "
-                f"(예상: {num_spatial_points}, 실제: {len(field_values)})"
-            )
-        
-        return (file_index, field_values)
-    except Exception as e:
-        raise Exception(f"파일 {os.path.basename(file_path)} 처리 중 오류: {e}")
+    z0, x0 = 500.0, -5.0
+    z1, x1 = 590.0, -45.0
+    slope = (x1 - x0) / (z1 - z0)
+    x = x0 + slope * (z_um - z0)
+    # 바깥 방향 기준으로 outward rounding
+    x = np.array([outward_round_scalar_um(v, step_um) for v in x], dtype=np.float64)
+    return x
 
 
-# --- 4. 배치 단위 데이터 로드 함수 ---
-def load_e_field_component(component_dir, total_steps=401, batch_size=20):
+def build_coil_mask_symmetric(x_um: np.ndarray, y_um: np.ndarray, z_um: np.ndarray):
     """
-    배치 단위로 파일을 로드하고 체크포인트를 사용하여 재시작 가능하게 처리합니다.
-    
-    Args:
-        component_dir: E-field 성분 폴더 경로 (Ex, Ey, 또는 Ez)
-        total_steps: 예상 파일 개수 (기본값: 401)
-        batch_size: 배치 크기 (기본값: 20)
-    
-    Returns:
-        combined_data: Shape (N_spatial, total_steps) - E-field 값 배열
+    왼쪽 코일만 기준으로 잡고, 오른쪽은 x축 대칭으로 생성.
+    polygon contains_points 대신 선형식 기반으로 포함 여부를 계산해서
+    좌우 대칭을 최대한 정확하게 맞춥니다.
+
+    왼쪽 코일:
+    - z in [500, 590] 에서는 x in [x_diag(z), -5]
+    - z in [590, 800] 에서는 x in [-45, -5]
+
+    오른쪽 코일:
+    - 왼쪽의 정확한 x축 대칭
     """
-    file_pattern = os.path.join(component_dir, "*.txt")
-    file_list = glob.glob(file_pattern)
-    # Sort by time step index (001, 002, ... 401) so order is correct even if 1.txt, 2.txt, ... 401.txt
-    def _sort_key(p):
-        base = os.path.basename(p)
-        try:
-            return int(os.path.splitext(base)[0])
-        except ValueError:
-            return 0
-    file_list = sorted(file_list, key=_sort_key)
-    
-    if len(file_list) == 0:
-        raise FileNotFoundError(f"'{component_dir}' 폴더에서 파일을 찾을 수 없습니다.")
-    # Load at most total_steps files (e.g. 1 cycle); caller tiles to NUM_CYCLES if needed
-    steps_to_load = min(len(file_list), total_steps)
-    if len(file_list) < total_steps:
-        print(f"   (파일 {len(file_list)}개 → 1사이클 {steps_to_load}개만 로드, 출력 시 {total_steps} 스텝으로 반복)")
-    file_list = file_list[:steps_to_load]
-    
-    # 첫 번째 파일로 공간 지점 수 확인
-    try:
-        df_temp = pd.read_csv(file_list[0], skiprows=2, sep=r'\s+', header=None, engine='python')
-        num_spatial_points = len(df_temp)
-    except Exception as e:
-        print(f"오류: 첫 번째 파일 로드 중 오류 발생 ({file_list[0]}): {e}")
-        raise
-    
-    component_name = os.path.basename(component_dir)
-    print(f"\n-> {component_name} 데이터 로드 시작...")
-    print(f"   공간 지점 수: {num_spatial_points:,}")
-    print(f"   로드할 시간 스텝 수: {steps_to_load}")
-    print(f"   배치 크기: {batch_size}개 파일/배치")
-    
-    # 체크포인트 로드
-    processed_batches = load_checkpoint(component_name)
-    num_batches = (steps_to_load + batch_size - 1) // batch_size
-    
-    if processed_batches:
-        print(f"   체크포인트 발견: {len(processed_batches)}/{num_batches} 배치 완료")
-        print(f"   이미 처리된 배치: {sorted(processed_batches)}")
-    else:
-        print(f"   새로 시작: 총 {num_batches}개 배치 처리 예정")
-    
-    # 배치 단위로 처리
-    for batch_idx in range(num_batches):
-        start_idx = batch_idx * batch_size
-        end_idx = min(start_idx + batch_size, steps_to_load)
-        batch_files = file_list[start_idx:end_idx]
-        
-        batch_file_path = get_batch_file_path(component_name, batch_idx)
-        
-        # 이미 처리된 배치는 스킵
-        if batch_idx in processed_batches:
-            if os.path.exists(batch_file_path):
-                print(f"   배치 {batch_idx+1}/{num_batches} (인덱스 {start_idx}~{end_idx-1}): 이미 완료, 스킵")
-                continue
-            else:
-                print(f"   배치 {batch_idx+1}/{num_batches}: 체크포인트는 있지만 파일이 없음, 재처리")
-        
-        # 배치 처리 (멀티프로세싱 사용)
-        print(f"   배치 {batch_idx+1}/{num_batches} 처리 중 (인덱스 {start_idx}~{end_idx-1})...")
-        batch_data = np.zeros((num_spatial_points, len(batch_files)), dtype=np.float32)
-        
-        # 워커 함수에 전달할 인자 준비
-        worker_args = [
-            (file_path, local_idx, num_spatial_points)
-            for local_idx, file_path in enumerate(batch_files)
-        ]
-        
-        # 멀티프로세싱으로 병렬 처리
-        with Pool(processes=NUM_WORKERS) as pool:
-            results = pool.imap(read_single_file, worker_args)
-            # tqdm 제거: 워커별 프린트 대신 전체 진행 상황만
-            results = list(results)  # 결과를 리스트로 수집
-        
-        # 결과를 배치 데이터에 할당
-        for file_index, field_values in results:
-            batch_data[:, file_index] = field_values
-        
-        # 배치 저장
-        np.save(batch_file_path, batch_data)
-        
-        # 체크포인트 업데이트
-        processed_batches.append(batch_idx)
-        save_checkpoint(component_name, processed_batches)
-        print(f"   배치 {batch_idx+1}/{num_batches} 저장 완료")
-    
-    # 모든 배치를 합치기
-    print(f"\n   모든 배치 합치는 중...")
-    batch_arrays = []
-    for batch_idx in range(num_batches):
-        batch_file_path = get_batch_file_path(component_name, batch_idx)
-        if not os.path.exists(batch_file_path):
-            raise FileNotFoundError(f"배치 파일을 찾을 수 없습니다: {batch_file_path}")
-        batch_data = np.load(batch_file_path)
-        batch_arrays.append(batch_data)
-    
-    combined_data = np.concatenate(batch_arrays, axis=1)
-    
-    # 임시 파일 및 체크포인트 정리
-    clear_checkpoint(component_name)
-    
-    print(f"{component_name} 데이터 로드 완료!")
-    return combined_data
+    left_poly = outward_round_points(LEFT_COIL_RAW_XZ_UM, GRID_STEP_UM)
+    right_poly = left_poly.copy()
+    right_poly[:, 0] *= -1.0
+
+    y_lo, y_hi = outward_round_interval_um(COIL_Y_RAW_UM, GRID_STEP_UM)
+
+    nx, ny, nz = len(x_um), len(y_um), len(z_um)
+    coil_mask = np.zeros((nx, ny, nz), dtype=bool)
+
+    y_mask = (y_um >= y_lo) & (y_um <= y_hi)
+
+    z_mask_low = (z_um >= 500.0) & (z_um <= 590.0)
+    z_mask_high = (z_um > 590.0) & (z_um <= 800.0)
+
+    x_diag_left = _interp_x_on_left_diagonal(z_um, GRID_STEP_UM)
+
+    xx, zz = np.meshgrid(x_um, z_um, indexing="ij")
+
+    # 왼쪽 코일
+    left_inside = np.zeros((nx, nz), dtype=bool)
+    left_inside[:, z_mask_low] = (
+        (xx[:, z_mask_low] >= x_diag_left[z_mask_low][None, :]) &
+        (xx[:, z_mask_low] <= -5.0)
+    )
+    left_inside[:, z_mask_high] = (
+        (xx[:, z_mask_high] >= -45.0) &
+        (xx[:, z_mask_high] <= -5.0)
+    )
+
+    # 오른쪽 코일: 왼쪽의 정확한 대칭
+    right_inside = np.zeros((nx, nz), dtype=bool)
+    right_inside[:, z_mask_low] = (
+        (xx[:, z_mask_low] >= 5.0) &
+        (xx[:, z_mask_low] <= -x_diag_left[z_mask_low][None, :])
+    )
+    right_inside[:, z_mask_high] = (
+        (xx[:, z_mask_high] >= 5.0) &
+        (xx[:, z_mask_high] <= 45.0)
+    )
+
+    inside_any = left_inside | right_inside
+    coil_mask[inside_any[:, None, :] & y_mask[None, :, None]] = True
+
+    shell_mask = build_surface_shell_mask(coil_mask)
+    hide_mask = coil_mask | shell_mask
+
+    meta = {
+        "left_poly_um": left_poly.astype(np.float32),
+        "right_poly_um": right_poly.astype(np.float32),
+        "y_range_um": np.array([y_lo, y_hi], dtype=np.float32),
+    }
+    return coil_mask, shell_mask, hide_mask, meta
 
 
-def extract_coordinates(file_path):
-    """
-    Ansys 텍스트 파일에서 X, Y, Z 좌표를 추출합니다.
-    
-    Args:
-        file_path: Ansys 텍스트 파일 경로
-    
-    Returns:
-        grid_coords: Shape (N_spatial, 3) - X, Y, Z 좌표 배열
-    """
-    print(f"\n-> 좌표 추출 중: {os.path.basename(file_path)}")
-    
-    try:
-        # skiprows=2: 헤더 2줄 스킵
-        # sep=r'\s+': 공백/탭으로 분리
-        # iloc[:, 0:3]: 첫 3열 (X, Y, Z 좌표)만 추출
-        df_coords = pd.read_csv(file_path, skiprows=2, sep=r'\s+', 
-                               header=None, engine='python').iloc[:, 0:3]
-        
-        grid_coords = df_coords.values.astype(np.float64)
-        print(f"좌표 추출 완료! Shape: {grid_coords.shape}")
-        
-        return grid_coords
-    
-    except Exception as e:
-        print(f"오류: 좌표 추출 중 오류 발생: {e}")
-        raise
+def read_single_component_txt(txt_path: Path, verbose: bool = False):
+    with txt_path.open("r", encoding="utf-8", errors="ignore") as f:
+        lines = f.readlines()
+
+    min_um, max_um, step_um, data_start_idx = parse_header(lines)
+
+    data = np.loadtxt(txt_path, skiprows=data_start_idx)
+    if data.ndim != 2 or data.shape[1] < 4:
+        raise ValueError(f"{txt_path} 파일이 4열 데이터 형식이 아닙니다.")
+
+    xyz_m = data[:, :3]
+    scalar = data[:, 3]
+    xyz_um = xyz_m * 1e6
+
+    x_um = expected_axis(min_um[0], max_um[0], step_um[0])
+    y_um = expected_axis(min_um[1], max_um[1], step_um[1])
+    z_um = expected_axis(min_um[2], max_um[2], step_um[2])
+
+    nx, ny, nz = len(x_um), len(y_um), len(z_um)
+    expected_points = nx * ny * nz
+
+    if scalar.size != expected_points:
+        raise ValueError(
+            f"{txt_path.name}: 데이터 포인트 수가 맞지 않습니다. "
+            f"헤더 기준 기대값 {expected_points} ({nx}x{ny}x{nz}), 실제 {scalar.size}"
+        )
+
+    x_unique = np.unique(np.round(xyz_um[:, 0], 9))
+    y_unique = np.unique(np.round(xyz_um[:, 1], 9))
+    z_unique = np.unique(np.round(xyz_um[:, 2], 9))
+
+    if len(x_unique) != nx or len(y_unique) != ny or len(z_unique) != nz:
+        raise ValueError(
+            f"{txt_path.name}: unique 좌표 개수가 헤더와 다릅니다. "
+            f"unique=({len(x_unique)}, {len(y_unique)}, {len(z_unique)}), "
+            f"header=({nx}, {ny}, {nz})"
+        )
+
+    field_xyz = scalar.reshape(nx, ny, nz)
+
+    if verbose:
+        print(f"[OK] {txt_path.name}")
+        print(f"     grid shape = ({nx}, {ny}, {nz})")
+        print(f"     x range um = [{x_um[0]}, {x_um[-1]}], step {step_um[0]}")
+        print(f"     y range um = [{y_um[0]}, {y_um[-1]}], step {step_um[1]}")
+        print(f"     z range um = [{z_um[0]}, {z_um[-1]}], step {step_um[2]}")
+
+    return field_xyz.astype(DTYPE, copy=False), x_um, y_um, z_um, step_um
 
 
-# --- 3. 데이터 검증 함수 ---
-def verify_data(E_field_data, grid_coords, total_steps=201):
-    """
-    추출된 데이터의 무결성을 검증합니다.
-    
-    Args:
-        E_field_data: Shape (3, N_spatial, total_steps) - E-field 데이터
-        grid_coords: Shape (N_spatial, 3) - 좌표 데이터
-        total_steps: 예상 시간 스텝 수
-    """
-    print("\n" + "=" * 60)
-    print("데이터 검증")
-    print("=" * 60)
-    
-    # 1. Shape 확인
-    print("\n--- 1. 배열 Shape 확인 ---")
-    print(f"E-field 데이터 Shape: {E_field_data.shape}")
-    print(f"   예상: (3, N_spatial, {total_steps})")
-    print(f"좌표 데이터 Shape: {grid_coords.shape}")
-    print(f"   예상: (N_spatial, 3)")
-    
-    if E_field_data.shape[0] != 3:
-        print(f"오류: E-field 데이터의 첫 번째 차원이 3이 아닙니다: {E_field_data.shape[0]}")
-        return False
-    
-    if E_field_data.shape[2] != total_steps:
-        print(f"오류: E-field 데이터의 시간 스텝 수가 예상과 다릅니다: {E_field_data.shape[2]} != {total_steps}")
-        return False
-    
-    if E_field_data.shape[1] != grid_coords.shape[0]:
-        print(f"오류: E-field와 좌표 데이터의 공간 지점 수가 일치하지 않습니다: "
-              f"{E_field_data.shape[1]} != {grid_coords.shape[0]}")
-        return False
-    
-    print("Shape 검증 통과")
-    
-    # 2. 데이터 타입 확인
-    print("\n--- 2. 데이터 타입 확인 ---")
-    print(f"E-field 데이터 타입: {E_field_data.dtype}")
-    print(f"좌표 데이터 타입: {grid_coords.dtype}")
-    print("데이터 타입 확인 완료")
-    
-    # 3. 최소/최대값 확인
-    print("\n--- 3. 데이터 범위 확인 ---")
-    for i, component_name in enumerate(['Ex', 'Ey', 'Ez']):
-        component_data = E_field_data[i]
-        e_min = np.min(component_data)
-        e_max = np.max(component_data)
-        e_mean = np.mean(component_data)
-        e_std = np.std(component_data)
-        print(f"{component_name}:")
-        print(f"  최소값: {e_min:.6e}")
-        print(f"  최대값: {e_max:.6e}")
-        print(f"  평균값: {e_mean:.6e}")
-        print(f"  표준편차: {e_std:.6e}")
-    
-    coord_min = np.min(grid_coords, axis=0)
-    coord_max = np.max(grid_coords, axis=0)
-    print(f"\n좌표 범위:")
-    print(f"  X: [{coord_min[0]:.6e}, {coord_max[0]:.6e}]")
-    print(f"  Y: [{coord_min[1]:.6e}, {coord_max[1]:.6e}]")
-    print(f"  Z: [{coord_min[2]:.6e}, {coord_max[2]:.6e}]")
-    print("데이터 범위 확인 완료")
-    
-    # 4. NaN/Inf 확인
-    print("\n--- 4. 데이터 무결성 확인 ---")
-    has_nan = np.any(np.isnan(E_field_data))
-    has_inf = np.any(np.isinf(E_field_data))
-    coord_has_nan = np.any(np.isnan(grid_coords))
-    coord_has_inf = np.any(np.isinf(grid_coords))
-    
-    if has_nan or has_inf:
-        print(f"오류: E-field 데이터에 NaN 또는 Inf가 포함되어 있습니다.")
-        if has_nan:
-            nan_count = np.sum(np.isnan(E_field_data))
-            print(f"   NaN 개수: {nan_count:,}")
-        if has_inf:
-            inf_count = np.sum(np.isinf(E_field_data))
-            print(f"   Inf 개수: {inf_count:,}")
-        return False
-    else:
-        print("E-field 데이터에 NaN 또는 Inf가 없습니다.")
-    
-    if coord_has_nan or coord_has_inf:
-        print(f"오류: 좌표 데이터에 NaN 또는 Inf가 포함되어 있습니다.")
-        return False
-    else:
-        print("좌표 데이터에 NaN 또는 Inf가 없습니다.")
-    
-    # 5. 시간 일관성 확인 (첫 시간과 마지막 시간의 통계 비교)
-    print("\n--- 5. 시간 일관성 확인 ---")
-    first_time = E_field_data[:, :, 0]
-    last_time = E_field_data[:, :, -1]
-    
-    for i, component_name in enumerate(['Ex', 'Ey', 'Ez']):
-        first_mean = np.mean(np.abs(first_time[i]))
-        last_mean = np.mean(np.abs(last_time[i]))
-        print(f"{component_name}:")
-        print(f"  첫 시간 스텝 평균 절댓값: {first_mean:.6e}")
-        print(f"  마지막 시간 스텝 평균 절댓값: {last_mean:.6e}")
-    
-    print("시간 일관성 확인 완료")
-    
-    print("\n" + "=" * 60)
-    print("모든 검증 통과!")
-    print("=" * 60)
-    return True
+def get_sorted_txt_files(folder: Path) -> list[Path]:
+    files = sorted(folder.glob(TXT_GLOB), key=natural_key)
+    if not files:
+        raise FileNotFoundError(f"txt 파일이 없습니다: {folder}")
+    return files
 
 
-# --- 4. 메인 실행 ---
-if __name__ == "__main__":
-    try:
-        # If final npy files exist, load and verify only (skip heavy extraction)
-        if os.path.exists(OUTPUT_E_FIELD_FILE) and os.path.exists(OUTPUT_COORDS_FILE):
-            print("\n" + "=" * 60)
-            print("기존 npy 파일 발견 — 검증만 수행")
-            print("=" * 60)
-            E_field_data = np.load(OUTPUT_E_FIELD_FILE)
-            grid_coords = np.load(OUTPUT_COORDS_FILE)
-            print(f"로드: E_field Shape {E_field_data.shape}, coords Shape {grid_coords.shape}")
-            verify_data(E_field_data, grid_coords, TOTAL_STEPS)
-            print("\n검증 완료. (추출/저장 생략)")
+def build_component_stack(component_dir: Path, component_name: str):
+    txt_files = get_sorted_txt_files(component_dir)
+
+    frames = []
+    x_um = y_um = z_um = spacing_um = None
+
+    for i, txt_path in enumerate(txt_files):
+        frame, x_i, y_i, z_i, s_i = read_single_component_txt(
+            txt_path,
+            verbose=(i == 0),
+        )
+
+        if i == 0:
+            x_um, y_um, z_um, spacing_um = x_i, y_i, z_i, s_i
         else:
-            # 4.1. E-field 데이터 로드
-            print("\n" + "=" * 60)
-            print("1단계: E-field 데이터 로드")
-            print("=" * 60)
-            
-            # Load 1 cycle (STEPS_PER_CYCLE = 401 files) per component
-            E_x = load_e_field_component(EX_DIR, STEPS_PER_CYCLE, BATCH_SIZE)
-            E_y = load_e_field_component(EY_DIR, STEPS_PER_CYCLE, BATCH_SIZE)
-            E_z = load_e_field_component(EZ_DIR, STEPS_PER_CYCLE, BATCH_SIZE)
-            
-            # Shape 확인 (모든 성분이 동일한 공간 지점 수를 가져야 함)
-            if not (E_x.shape[0] == E_y.shape[0] == E_z.shape[0]):
-                raise ValueError(
-                    f"공간 지점 수가 일치하지 않습니다: "
-                    f"Ex={E_x.shape[0]}, Ey={E_y.shape[0]}, Ez={E_z.shape[0]}"
-                )
-            
-            # 필요시 여러 사이클 반복
-            if NUM_CYCLES > 1:
-                print(f"\n   1사이클({STEPS_PER_CYCLE} 스텝) → {NUM_CYCLES}회 반복하여 {TOTAL_STEPS} 스텝 생성")
-                E_x = np.tile(E_x, (1, NUM_CYCLES))
-                E_y = np.tile(E_y, (1, NUM_CYCLES))
-                E_z = np.tile(E_z, (1, NUM_CYCLES))
-            else:
-                print(f"\n   전체 {STEPS_PER_CYCLE}개 시간 스텝 로드 완료")
-            
-            # 3개 성분을 스택: Shape (3, N_spatial, TOTAL_STEPS)
-            E_field_data = np.stack((E_x, E_y, E_z), axis=0)
-            print(f"\n최종 E-field 데이터 Shape: {E_field_data.shape}")
-            
-            # 4.2. 좌표 추출
-            print("\n" + "=" * 60)
-            print("2단계: 좌표 추출")
-            print("=" * 60)
-            
-            # Ex 폴더의 첫 번째 파일에서 좌표 추출 (모든 폴더의 좌표는 동일)
-            first_ex_file = os.path.join(EX_DIR, "001.txt")
-            grid_coords = extract_coordinates(first_ex_file)
-            
-            # 4.3. 데이터 검증
-            verify_data(E_field_data, grid_coords, TOTAL_STEPS)
-            
-            # 4.4. 파일 저장
-            print("\n" + "=" * 60)
-            print("3단계: 파일 저장")
-            print("=" * 60)
-            
-            np.save(OUTPUT_E_FIELD_FILE, E_field_data)
-            file_size_mb = os.path.getsize(OUTPUT_E_FIELD_FILE) / (1024**2)
-            print(f"E-field 데이터 저장 완료: {OUTPUT_E_FIELD_FILE}")
-            print(f"   파일 크기: {file_size_mb:.2f} MB")
-            
-            np.save(OUTPUT_COORDS_FILE, grid_coords)
-            coords_size_mb = os.path.getsize(OUTPUT_COORDS_FILE) / (1024**2)
-            print(f"좌표 데이터 저장 완료: {OUTPUT_COORDS_FILE}")
-            print(f"   파일 크기: {coords_size_mb:.2f} MB")
-            
-            print("\n" + "=" * 60)
-            print("모든 작업 완료!")
-            print("=" * 60)
-            print(f"\n생성된 파일:")
-            print(f"  - {OUTPUT_E_FIELD_FILE}")
-            print(f"  - {OUTPUT_COORDS_FILE}")
-        
-    except FileNotFoundError as e:
-        print(f"\n오류: 파일을 찾을 수 없습니다: {e}")
-        print("디렉토리 경로와 파일 위치를 확인하세요.")
-    except Exception as e:
-        print(f"\n오류: 처리 중 예상치 못한 오류 발생: {e}")
-        import traceback
-        traceback.print_exc()
+            if (
+                frame.shape != frames[0].shape
+                or not np.allclose(x_i, x_um)
+                or not np.allclose(y_i, y_um)
+                or not np.allclose(z_i, z_um)
+            ):
+                raise ValueError(f"{component_name}: {txt_path.name} 에서 격자 불일치가 발생했습니다.")
+
+        frames.append(frame)
+
+        if (i + 1) % 25 == 0 or (i + 1) == len(txt_files):
+            print(f"{component_name}: {i + 1}/{len(txt_files)} loaded")
+
+    stack = np.stack(frames, axis=0)  # (T, X, Y, Z)
+    return stack, x_um, y_um, z_um, spacing_um, txt_files
+
+
+def build_and_save():
+    print("[BUILD] 저장 파일이 없어서 txt를 읽어 새로 생성합니다.")
+
+    ex, x_um, y_um, z_um, spacing_um, ex_files = build_component_stack(EX_DIR, "Ex")
+    ey, x2, y2, z2, spacing_um2, ey_files = build_component_stack(EY_DIR, "Ey")
+    ez, x3, y3, z3, spacing_um3, ez_files = build_component_stack(EZ_DIR, "Ez")
+
+    if not (len(ex_files) == len(ey_files) == len(ez_files)):
+        raise ValueError(
+            f"파일 개수가 다릅니다. Ex={len(ex_files)}, Ey={len(ey_files)}, Ez={len(ez_files)}"
+        )
+
+    if not (
+        np.allclose(x_um, x2) and np.allclose(x_um, x3) and
+        np.allclose(y_um, y2) and np.allclose(y_um, y3) and
+        np.allclose(z_um, z2) and np.allclose(z_um, z3)
+    ):
+        raise ValueError("Ex/Ey/Ez 사이의 좌표축이 일치하지 않습니다.")
+
+    if not (
+        np.allclose(spacing_um, spacing_um2) and np.allclose(spacing_um, spacing_um3)
+    ):
+        raise ValueError("Ex/Ey/Ez 사이의 grid spacing이 일치하지 않습니다.")
+
+    E = np.stack([ex, ey, ez], axis=-1).astype(DTYPE, copy=False)
+    t_us = np.arange(E.shape[0], dtype=np.float64) * DT_US
+    Emag = np.linalg.norm(E, axis=-1).astype(DTYPE, copy=False)
+
+    coil_mask, shell_mask, hide_mask, coil_meta = build_coil_mask_symmetric(x_um, y_um, z_um)
+
+    np.save(OUTPUT_NPY, E)
+    np.savez_compressed(
+        OUTPUT_NPZ,
+        E=E,
+        Emag=Emag,
+        x_um=x_um.astype(np.float32),
+        y_um=y_um.astype(np.float32),
+        z_um=z_um.astype(np.float32),
+        t_us=t_us.astype(np.float32),
+        spacing_um=spacing_um.astype(np.float32),
+        component_order=np.array(COMPONENT_ORDER),
+        coil_mask=coil_mask,
+        shell_mask=shell_mask,
+        hide_mask=hide_mask,
+        coil_left_poly_um=coil_meta["left_poly_um"],
+        coil_right_poly_um=coil_meta["right_poly_um"],
+        coil_y_range_um=coil_meta["y_range_um"],
+    )
+
+    print("\n[SAVED]")
+    print(f"  {OUTPUT_NPY}")
+    print(f"  {OUTPUT_NPZ}")
+    print("\n[SUMMARY]")
+    print(f"  E shape        : {E.shape}   (T, X, Y, Z, 3)")
+    print(f"  Emag shape     : {Emag.shape} (T, X, Y, Z)")
+    print(f"  dtype          : {E.dtype}")
+    print(f"  x range (um)   : {x_um[0]} to {x_um[-1]}  n={len(x_um)}")
+    print(f"  y range (um)   : {y_um[0]} to {y_um[-1]}  n={len(y_um)}")
+    print(f"  z range (um)   : {z_um[0]} to {z_um[-1]}  n={len(z_um)}")
+    print(f"  dt (us)        : {DT_US}")
+    print(f"  total T        : {E.shape[0]}")
+    print(f"  component order: {COMPONENT_ORDER}")
+    print(f"  plot-hide voxels: {int(np.sum(hide_mask))}")
+
+    return E, Emag, x_um, y_um, z_um, t_us, hide_mask
+
+
+def load_existing():
+    print("[LOAD] 기존 출력 파일을 로드합니다.")
+    npz = np.load(OUTPUT_NPZ, allow_pickle=True)
+
+    E = npz["E"]
+    if "Emag" in npz:
+        Emag = npz["Emag"]
+    else:
+        Emag = np.linalg.norm(E, axis=-1).astype(DTYPE, copy=False)
+
+    x_um = npz["x_um"]
+    y_um = npz["y_um"]
+    z_um = npz["z_um"]
+    t_us = npz["t_us"]
+
+    if "hide_mask" in npz:
+        hide_mask = npz["hide_mask"]
+    else:
+        coil_mask, shell_mask, hide_mask, _ = build_coil_mask_symmetric(x_um, y_um, z_um)
+
+    if "component_order" in npz:
+        component_order = tuple(npz["component_order"].tolist())
+    else:
+        component_order = COMPONENT_ORDER
+
+    print("\n[SUMMARY]")
+    print(f"  E shape        : {E.shape}   (T, X, Y, Z, 3)")
+    print(f"  Emag shape     : {Emag.shape} (T, X, Y, Z)")
+    print(f"  dtype          : {E.dtype}")
+    print(f"  x range (um)   : {x_um[0]} to {x_um[-1]}  n={len(x_um)}")
+    print(f"  y range (um)   : {y_um[0]} to {y_um[-1]}  n={len(y_um)}")
+    print(f"  z range (um)   : {z_um[0]} to {z_um[-1]}  n={len(z_um)}")
+    print(f"  dt (us)        : {t_us[1] - t_us[0] if len(t_us) > 1 else 0}")
+    print(f"  total T        : {E.shape[0]}")
+    print(f"  component order: {component_order}")
+    print(f"  plot-hide voxels: {int(np.sum(hide_mask))}")
+
+    return E, Emag, x_um, y_um, z_um, t_us, hide_mask
+
+
+def get_volume(E, Emag, mode: str):
+    if mode == "Ex":
+        return E[..., 0]
+    if mode == "Ey":
+        return E[..., 1]
+    if mode == "Ez":
+        return E[..., 2]
+    if mode == "|E|":
+        return Emag
+    raise ValueError(f"알 수 없는 mode: {mode}")
+
+
+def masked_copy_for_plot(arr3d: np.ndarray, hide_mask: np.ndarray) -> np.ndarray:
+    out = arr3d.astype(np.float32, copy=True)
+    out[hide_mask] = np.nan
+    return out
+
+
+def make_time_slider_data(t_us: np.ndarray):
+    """
+    시간 슬라이더를 실제 시간값 기준 0 ~ 50 us 범위로 제한.
+    해당 구간에 데이터가 하나도 없으면 전체 시간축 사용.
+    """
+    visible = np.where((t_us >= 0.0) & (t_us <= 50.0))[0]
+    if visible.size == 0:
+        visible = np.arange(len(t_us))
+
+    t_visible = t_us[visible]
+    t_min = float(t_visible[0])
+    t_max = float(t_visible[-1])
+
+    if len(t_visible) >= 2:
+        step = float(np.min(np.diff(t_visible)))
+    else:
+        step = 1.0
+
+    return visible, t_min, t_max, step
+
+
+def nearest_visible_time_index(slider_time_us: float, visible_idx: np.ndarray, t_us: np.ndarray) -> int:
+    visible_times = t_us[visible_idx]
+    j = int(np.argmin(np.abs(visible_times - slider_time_us)))
+    return int(visible_idx[j])
+
+
+def plot_interactive(E, Emag, x_um, y_um, z_um, t_us, hide_mask):
+    T, NX, NY, NZ, _ = E.shape
+
+    visible_idx, t_slider_min, t_slider_max, t_slider_step = make_time_slider_data(t_us)
+
+    t_idx0 = int(visible_idx[0])
+    x_idx0 = NX // 2
+    y_idx0 = NY // 2
+    z_idx0 = NZ // 2
+    mode0 = "Ez"
+
+    modes = ("Ex", "Ey", "Ez", "|E|")
+
+    cmap = plt.cm.viridis.copy()
+    cmap.set_bad(color="white")
+
+    vmins = {}
+    vmaxs = {}
+    for m in modes:
+        V = get_volume(E, Emag, m)
+        V_plot = np.where(hide_mask[None, ...], np.nan, V)
+        vmins[m] = float(np.nanmin(V_plot))
+        vmaxs[m] = float(np.nanmax(V_plot))
+        if np.isclose(vmins[m], vmaxs[m]):
+            vmaxs[m] = vmins[m] + 1e-12
+
+    V0 = masked_copy_for_plot(get_volume(E, Emag, mode0)[t_idx0], hide_mask)
+    xy0 = V0[:, :, z_idx0].T
+    xz0 = V0[:, y_idx0, :].T
+    yz0 = V0[x_idx0, :, :].T
+
+    fig, axes = plt.subplots(1, 3, figsize=(17, 7))
+    plt.subplots_adjust(left=0.08, right=0.88, bottom=0.29, top=0.88, wspace=0.28)
+
+    ax_xy, ax_xz, ax_yz = axes
+
+    img_xy = ax_xy.imshow(
+        xy0,
+        origin="lower",
+        aspect="auto",
+        extent=[x_um[0], x_um[-1], y_um[0], y_um[-1]],
+        vmin=vmins[mode0],
+        vmax=vmaxs[mode0],
+        cmap=cmap,
+    )
+    ax_xy.set_xlabel("x (um)")
+    ax_xy.set_ylabel("y (um)")
+
+    img_xz = ax_xz.imshow(
+        xz0,
+        origin="lower",
+        aspect="auto",
+        extent=[x_um[0], x_um[-1], z_um[0], z_um[-1]],
+        vmin=vmins[mode0],
+        vmax=vmaxs[mode0],
+        cmap=cmap,
+    )
+    ax_xz.set_xlabel("x (um)")
+    ax_xz.set_ylabel("z (um)")
+
+    img_yz = ax_yz.imshow(
+        yz0,
+        origin="lower",
+        aspect="auto",
+        extent=[y_um[0], y_um[-1], z_um[0], z_um[-1]],
+        vmin=vmins[mode0],
+        vmax=vmaxs[mode0],
+        cmap=cmap,
+    )
+    ax_yz.set_xlabel("y (um)")
+    ax_yz.set_ylabel("z (um)")
+
+    cbar = fig.colorbar(img_xy, ax=axes.ravel().tolist(), shrink=0.95)
+    cbar.set_label(mode0)
+
+    title = fig.suptitle("", fontsize=12)
+
+    ax_radio = plt.axes([0.90, 0.58, 0.08, 0.18])
+    radio = RadioButtons(ax_radio, modes, active=2)
+
+    ax_t = plt.axes([0.12, 0.20, 0.70, 0.03])
+    ax_x = plt.axes([0.12, 0.15, 0.70, 0.03])
+    ax_y = plt.axes([0.12, 0.10, 0.70, 0.03])
+    ax_z = plt.axes([0.12, 0.05, 0.70, 0.03])
+
+    s_t = Slider(ax_t, "t (us)", t_slider_min, t_slider_max, valinit=float(t_us[t_idx0]), valstep=t_slider_step)
+    s_x = Slider(ax_x, "x idx", 0, NX - 1, valinit=x_idx0, valstep=1)
+    s_y = Slider(ax_y, "y idx", 0, NY - 1, valinit=y_idx0, valstep=1)
+    s_z = Slider(ax_z, "z idx", 0, NZ - 1, valinit=z_idx0, valstep=1)
+
+    ax_reset = plt.axes([0.90, 0.45, 0.08, 0.06])
+    btn_reset = Button(ax_reset, "Reset")
+
+    def update(_=None):
+        mode = radio.value_selected
+
+        t_idx = nearest_visible_time_index(float(s_t.val), visible_idx, t_us)
+        x_idx = int(s_x.val)
+        y_idx = int(s_y.val)
+        z_idx = int(s_z.val)
+
+        V = masked_copy_for_plot(get_volume(E, Emag, mode)[t_idx], hide_mask)
+
+        xy = V[:, :, z_idx].T
+        xz = V[:, y_idx, :].T
+        yz = V[x_idx, :, :].T
+
+        img_xy.set_data(xy)
+        img_xz.set_data(xz)
+        img_yz.set_data(yz)
+
+        img_xy.set_clim(vmins[mode], vmaxs[mode])
+        img_xz.set_clim(vmins[mode], vmaxs[mode])
+        img_yz.set_clim(vmins[mode], vmaxs[mode])
+        cbar.update_normal(img_xy)
+        cbar.set_label(mode)
+
+        ax_xy.set_title(f"{mode} XY @ z={z_um[z_idx]:.1f} um")
+        ax_xz.set_title(f"{mode} XZ @ y={y_um[y_idx]:.1f} um")
+        ax_yz.set_title(f"{mode} YZ @ x={x_um[x_idx]:.1f} um")
+
+        title.set_text(
+            f"mode={mode}, "
+            f"t={t_us[t_idx]:.1f} us, "
+            f"x={x_idx} ({x_um[x_idx]:.1f} um), "
+            f"y={y_idx} ({y_um[y_idx]:.1f} um), "
+            f"z={z_idx} ({z_um[z_idx]:.1f} um)"
+        )
+        fig.canvas.draw_idle()
+
+    def reset(_):
+        s_t.reset()
+        s_x.reset()
+        s_y.reset()
+        s_z.reset()
+
+    radio.on_clicked(update)
+    s_t.on_changed(update)
+    s_x.on_changed(update)
+    s_y.on_changed(update)
+    s_z.on_changed(update)
+    btn_reset.on_clicked(reset)
+
+    update()
+    plt.show()
+
+
+def main():
+    if OUTPUT_NPY.exists() and OUTPUT_NPZ.exists():
+        E, Emag, x_um, y_um, z_um, t_us, hide_mask = load_existing()
+    else:
+        E, Emag, x_um, y_um, z_um, t_us, hide_mask = build_and_save()
+
+    plot_interactive(E, Emag, x_um, y_um, z_um, t_us, hide_mask)
+
+
+if __name__ == "__main__":
+    main()

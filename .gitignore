@@ -1,0 +1,205 @@
+# =========================
+# Project data folders
+# =========================
+# Large/generated data that should not be tracked
+allen_model/
+data/
+efield/
+
+# Optional large/result folders you may also want ignored
+outputs/
+results/
+logs/
+tmp/
+temp/
+cache/
+
+# Keep folder structure if needed by adding placeholder files manually
+# !data/.gitkeep
+# !efield/.gitkeep
+# !allen_model/.gitkeep
+
+
+# =========================
+# Python
+# =========================
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyd
+*.pyo
+
+# Build / packaging
+build/
+dist/
+develop-eggs/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+share/python-wheels/
+var/
+wheels/
+*.egg-info/
+*.egg
+pip-wheel-metadata/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# Python tooling caches
+.python-version
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.pyre/
+.hypothesis/
+.tox/
+.nox/
+.dmypy.json
+dmypy.json
+
+# Coverage
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+*.cover
+*.py,cover
+
+# Type checker / lint
+.pytype/
+
+# Profiling / local runtime artifacts
+*.prof
+*.lprof
+
+
+# =========================
+# Jupyter / IPython
+# =========================
+.ipynb_checkpoints/
+profile_default/
+ipython_config.py
+
+# JupyterLab / notebook runtime
+.jupyter/
+*.nbconvert.ipynb
+
+
+# =========================
+# VS Code / editors
+# =========================
+.vscode/
+!.vscode/extensions.json
+!.vscode/settings.json.example
+!.vscode/launch.json.example
+!.vscode/tasks.json.example
+
+# Other editors / IDEs
+.idea/
+*.iml
+*.suo
+*.user
+*.userossc
+*.sln.docstates
+*.swp
+*.swo
+*~
+
+
+# =========================
+# OS files
+# =========================
+.DS_Store
+Thumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+.Spotlight-V100/
+.Trashes/
+._*
+
+
+# =========================
+# Environment / secrets
+# =========================
+.env
+.env.*
+*.local
+*.secret
+secrets.json
+credentials.json
+token.json
+
+
+# =========================
+# Logs
+# =========================
+*.log
+logs/
+log/
+
+
+# =========================
+# Binary / numeric data
+# =========================
+# Common scientific output formats
+*.npy
+*.npz
+*.mat
+*.h5
+*.hdf5
+*.pkl
+*.pickle
+
+# If you want to track small example npy/npz files later,
+# remove the relevant patterns above or unignore specific files:
+# !data/example_small.npy
+# !data/example_small.npz
+
+
+# =========================
+# NEURON / compiled mechanism artifacts
+# =========================
+x86_64/
+nrnmech.dll
+nrnmech.lib
+nrnmech.exp
+*.modc
+*.c
+*.o
+*.obj
+*.so
+*.dll
+*.exe
+
+# hoc / simulation outputs if generated locally
+*.dat
+*.out
+
+
+# =========================
+# Archives
+# =========================
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.7z
+*.rar
+
+
+# =========================
+# Misc
+# =========================
+# Local notes / scratch
+notes_private/
+scratch/
