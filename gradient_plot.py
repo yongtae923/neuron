@@ -23,7 +23,7 @@ from scipy.ndimage import gaussian_filter
 # 1) Load data (memory-mapped)
 # =========================
 G_PATH = "data/gradient/grad_Exdx_Eydy_Ezdz_1cycle.npy"
-C_PATH = "efield/E_field_grid_coords.npy"
+C_PATH = "efield/old_2025/E_field_grid_coords.npy"
 
 G = np.load(G_PATH, mmap_mode="r")    # shape: (3, nx, ny, nz, T)
 coords = np.load(C_PATH)              # shape: (N_spatial, 3)

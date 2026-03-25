@@ -19,8 +19,8 @@ from matplotlib.widgets import Slider, RadioButtons, CheckButtons
 # =========================
 # 1) Load data (memory-mapped)
 # =========================
-E_path = "efield/E_field_1cycle.npy"
-C_path = "efield/E_field_grid_coords.npy"
+E_path = "efield/old_2025/E_field_1cycle.npy"
+C_path = "efield/old_2025/E_field_grid_coords.npy"
 
 E = np.load(E_path, mmap_mode="r")          # shape: (3, N_spatial, T)
 coords = np.load(C_path)                    # shape: (N_spatial, 3)
