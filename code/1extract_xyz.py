@@ -446,9 +446,8 @@ def get_volume(E, Emag, mode: str):
 
 
 def masked_copy_for_plot(arr3d: np.ndarray, hide_mask: np.ndarray) -> np.ndarray:
-    out = arr3d.astype(np.float32, copy=True)
-    out[hide_mask] = np.nan
-    return out
+    # 코일 영역 숨기기 임시 비활성화
+    return arr3d.astype(np.float32, copy=True)
 
 
 def make_time_slider_data(t_us: np.ndarray):
@@ -498,7 +497,8 @@ def plot_interactive(E, Emag, x_um, y_um, z_um, t_us, hide_mask):
     vmaxs = {}
     for m in modes:
         V = get_volume(E, Emag, m)
-        V_plot = np.where(hide_mask[None, ...], np.nan, V)
+        # 코일 hide mask를 플롯에서 임시로 적용하지 않음
+        V_plot = V
         vmins[m] = float(np.nanmin(V_plot))
         vmaxs[m] = float(np.nanmax(V_plot))
         if np.isclose(vmins[m], vmaxs[m]):
