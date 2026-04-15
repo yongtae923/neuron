@@ -45,11 +45,11 @@ from matplotlib.widgets import Slider, Button, RadioButtons
 # =========================
 # 사용자 설정
 # =========================
-BASE_DIR = Path(r"D:\yongtae\neuron\efield\400us_50Hz_10umspaing_100mA")
+BASE_DIR = Path(r"D:\yongtae\neuron\efield\30V_OUT10_IN20_CI")
 
-EX_DIR = BASE_DIR / "400us_50Hz_10umspaing_100mA_Ex"
-EY_DIR = BASE_DIR / "400us_50Hz_10umspaing_100mA_Ey"
-EZ_DIR = BASE_DIR / "400us_50Hz_10umspaing_100mA_Ez"
+EX_DIR = BASE_DIR / "30V_OUT10_IN20_CI_Ex"
+EY_DIR = BASE_DIR / "30V_OUT10_IN20_CI_Ey"
+EZ_DIR = BASE_DIR / "30V_OUT10_IN20_CI_Ez"
 
 OUTPUT_NPY = BASE_DIR / "1extract_output.npy"
 OUTPUT_NPZ = BASE_DIR / "1extract_output.npz"
