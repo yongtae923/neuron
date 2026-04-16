@@ -1,4 +1,4 @@
-# 4_simulate_roi.py
+# D:\yongtae\neuron\code\4simulate_roi.py
 """
 Multiprocessing (spawn) summary-only simulation over outside-coil grid points.
 This is gradient_allen_v2.py를 ROI/600us 케이스로 조정한 버전.
