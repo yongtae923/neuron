@@ -1,17 +1,15 @@
 # D:\yongtae\neuron\angleoutin\code\1_extract_xyz.py
 
 """
-Ansys E-field 데이터 추출 및 검증 스크립트
-
 기능:
-1. Ex, Ey, Ez 폴더에서 N사이클 데이터 로드 (1사이클=201개 파일, 10ms/50us)
-2. 좌표 추출 (X, Y, Z)
-3. E-field 값 추출 및 NumPy 배열로 저장
-4. 데이터 무결성 검증
+- Ex/Ey/Ez 텍스트 파일에서 E-field와 좌표를 추출하고 검증합니다.
 
-출력:
-- E_field_Ncycle.npy: Shape (3, N_spatial, N_steps) - Ex, Ey, Ez 성분
-- E_field_grid_coords.npy: Shape (N_spatial, 3) - X, Y, Z 좌표
+입출력:
+- 입력: data/30V_OUT10_IN20_CI/*_Ex, *_Ey, *_Ez/*.txt
+- 출력: data/30V_OUT10_IN20_CI/1_E_field_1cycle.npy, 1_E_field_grid_coords.npy
+
+실행 방법:
+- python 1_extract_xyz.py
 """
 
 import warnings
