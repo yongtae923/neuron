@@ -1,19 +1,21 @@
 # D:\yongtae\neuron\angleoutin\code\7_allen_roi.py
 
 """
-gradient_allen.py
+7_allen_roi.py
 ------------------------------------------------------------
-Multiprocessing (spawn) summary-only simulation over outside-coil grid points.
+Angleoutin ROI summary simulation over outside-coil grid points.
+Multiprocessing (spawn) version.
 
-This follows the structure of simulate_allen_v3.py, but uses gradient-driven
-extracellular forcing (same surrogate idea as gradient_four.py):
+This script uses gradient-driven extracellular forcing:
   Gxx = dEx/dx, Gyy = dEy/dy, Gzz = dEz/dz
   g_parallel = ux^2 * Gxx + uy^2 * Gyy + uz^2 * Gzz
   dphi_mV    = -gain * g_parallel * ds_um^2 * 1e-9
 
 Input:
-  - data/gradient/grad_Exdx_Eydy_Ezdz_1cycle.npy  (3, Nx, Ny, Nz, Nt)
-  - efield/E_field_grid_coords.npy                 (N_spatial, 3) in meters
+    - angleoutin/data/30V_OUT10_IN20_CI/3_gradient_1cycle.npy
+    - angleoutin/data/30V_OUT10_IN20_CI/1_E_field_grid_coords.npy
+    - angleoutin/data/30V_OUT10_IN20_CI/0_grid_time_spec.json
+    - angleoutin/data/30V_OUT10_IN20_CI/0_roi.json
 
 Output (summary only):
   - vm0_mV
@@ -21,8 +23,11 @@ Output (summary only):
   - vm_min_mV
   - spike_count
   - spike_times_ms
+    - spike_on_times_ms
+    - spike_off_times_ms
   - vm_trace_t_ms
   - vm_trace_0to1ms_mV
+    - saved to angleoutin/data/30V_OUT10_IN20_CI/7_gradient_allen/
 ------------------------------------------------------------
 """
 
@@ -31,6 +36,8 @@ from __future__ import annotations
 # pyright: reportGeneralTypeIssues=false, reportMissingImports=false, reportMissingModuleSource=false
 
 import os
+import sys
+import json
 import re
 import math
 import time
@@ -50,29 +57,46 @@ warnings.filterwarnings(
 import numpy as np
 from scipy.spatial import cKDTree  # type: ignore[reportMissingImports]
 from tqdm import tqdm
+from matplotlib.path import Path as MplPath
+
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_ROOT = os.path.dirname(os.path.dirname(SCRIPT_DIR))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
 
 if TYPE_CHECKING:  # 타입 체커 전용: 실제 시그니처는 무시
     from model_allen_neuron import AllenNeuronModel as AllenNeuronModelRuntime
     AllenNeuronModel_t = AllenNeuronModelRuntime
 else:
     from model_allen_neuron import AllenNeuronModel as AllenNeuronModelRuntime
-    AllenNeuronModel_t = Any  # 런타임에서는 Any 로 취급하여 타입 경고 방지
+    AllenNeuronModel_t = AllenNeuronModelRuntime
 
 
 # =========================
 # Config (default)
 # =========================
 
-CELL_IDS = ("529898751", "529889679", "626170547", "497232735")
-
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-
-GRAD_VALUES_FILE = os.path.join(
-    SCRIPT_DIR, "data", "gradient", "grad_Exdx_Eydy_Ezdz_1cycle.npy"
+CELL_IDS = (
+    "529898751",
+    # "529889679",
+    # "626170547",
+    # "497232735",
 )
-E_GRID_COORDS_FILE = os.path.join(SCRIPT_DIR, "efield", "E_field_grid_coords.npy")
 
-OUTPUT_DIR = os.path.join(SCRIPT_DIR, "data", "gradient_allen")
+DATA_DIR = os.path.join(os.path.dirname(SCRIPT_DIR), "data", "30V_OUT10_IN20_CI")
+SPEC_PATH = os.path.join(DATA_DIR, "0_grid_time_spec.json")
+ROI_PATH = os.path.join(DATA_DIR, "0_roi.json")
+
+with open(SPEC_PATH, "r", encoding="utf-8") as f:
+    SPEC = json.load(f)
+
+with open(ROI_PATH, "r", encoding="utf-8") as f:
+    ROI_SPEC = json.load(f)
+
+GRAD_VALUES_FILE = os.path.join(DATA_DIR, "3_gradient_1cycle.npy")
+E_GRID_COORDS_FILE = os.path.join(DATA_DIR, "1_E_field_grid_coords.npy")
+
+OUTPUT_DIR = os.path.join(DATA_DIR, "7_gradient_allen")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 
@@ -93,37 +117,24 @@ TSTOP_REL_MS = 4.0
 VM_TRACE_T0_MS = 0.0
 VM_TRACE_T1_MS = 1.0
 
-# v2 policy: run only 1x
+# 1x only
 DEFAULT_GRAD_GAINS = (1.0,)
 
-# ROI filter in um (applied after outside-coil filtering)
+# ROI filter in um
 ROI_BOUNDS_UM = {
-    "x_min": -200.0,
-    "x_max": 200.0,
-    "y_min": -60.0,
-    "y_max": 60.0,
-    "z_min": 480.0,
-    "z_max": 600.0,
+    "x_min": float(ROI_SPEC["x"]["min"]),
+    "x_max": float(ROI_SPEC["x"]["max"]),
+    "y_min": float(ROI_SPEC["y"]["min"]),
+    "y_max": float(ROI_SPEC["y"]["max"]),
+    "z_min": float(ROI_SPEC["z"]["min"]),
+    "z_max": float(ROI_SPEC["z"]["max"]),
 }
 
 # Coil region in um (excluded region)
-# Pentagonal prism:
-# Face (y=-32): (-79.5,561), (0,498), (79.5,561), (79.5,1502), (-79.5,1502) in (x,z)
-# Other face at y=+32 with same (x,z)
 COIL_REGION_UM = {
-    "y_min": -32.0,
-    "y_max": 32.0,
-    "z_tip_min": 498.0,
-    "z_shoulder": 561.0,
-    "z_max": 1502.0,
-    "x_half_max": 79.5,
-    "polygon_xz_vertices": [
-        (-79.5, 561.0),
-        (0.0, 498.0),
-        (79.5, 561.0),
-        (79.5, 1502.0),
-        (-79.5, 1502.0),
-    ],
+    "y_min": float(SPEC["coil_mask_um"]["y"]["min"]),
+    "y_max": float(SPEC["coil_mask_um"]["y"]["max"]),
+    "polygon_xz_vertices": [tuple(v) for v in SPEC["coil_mask_um"]["polygon_xz"]],
 }
 
 # Equilibrium
@@ -232,15 +243,11 @@ def worker_run(
         y = coords_um[:, 1]
         z = coords_um[:, 2]
         y_in = (y >= COIL_REGION_UM["y_min"]) & (y <= COIL_REGION_UM["y_max"])
-        z_in = (z >= COIL_REGION_UM["z_tip_min"]) & (z <= COIL_REGION_UM["z_max"])
-        x_lim = np.where(
-            z <= COIL_REGION_UM["z_shoulder"],
-            COIL_REGION_UM["x_half_max"] * (z - COIL_REGION_UM["z_tip_min"])
-            / (COIL_REGION_UM["z_shoulder"] - COIL_REGION_UM["z_tip_min"]),
-            COIL_REGION_UM["x_half_max"],
-        )
-        xz_in = z_in & (np.abs(x) <= x_lim)
-        return y_in & xz_in
+        poly = np.array(COIL_REGION_UM["polygon_xz_vertices"], dtype=np.float64)
+        pentagon = MplPath(poly)
+        xz_in = pentagon.contains_points(np.column_stack([x, z]), radius=1e-9)
+        inside = y_in & xz_in
+        return inside
 
     def xyz_at_seg_linear(sec, segx: float) -> Tuple[float, float, float]:
         n = int(h.n3d(sec=sec))
@@ -563,7 +570,8 @@ def worker_run(
     vm_max = np.full(nlocal, -np.inf, dtype=np.float64)
     vm_min = np.full(nlocal, np.inf, dtype=np.float64)
     spike_count = np.zeros(nlocal, dtype=np.int32)
-    spike_times_ms: List[List[float]] = [[] for _ in range(nlocal)]
+    spike_on_times_ms: List[List[float]] = [[] for _ in range(nlocal)]
+    spike_off_times_ms: List[List[float]] = [[] for _ in range(nlocal)]
     vm_trace = np.full((nlocal, vm_trace_t.size), np.nan, dtype=np.float64)
 
     pbar = tqdm(
@@ -595,6 +603,7 @@ def worker_run(
         last_gi = -1
 
         prev_vm: Optional[float] = None
+        spike_active = False
         sc = 0
 
         for k in range(nt):
@@ -631,6 +640,9 @@ def worker_run(
 
             if k == 0:
                 vm0[li] = vm
+                if vm >= SPIKE_THR_MV:
+                    spike_active = True
+                    spike_on_times_ms[li].append(t_rel)
             if vm > vm_max[li]:
                 vm_max[li] = vm
             if vm < vm_min[li]:
@@ -638,13 +650,19 @@ def worker_run(
 
             if prev_vm is not None and (prev_vm < SPIKE_THR_MV) and (vm >= SPIKE_THR_MV):
                 sc += 1
-                spike_times_ms[li].append(t_rel)
+                spike_on_times_ms[li].append(t_rel)
+                spike_active = True
+            if spike_active and prev_vm is not None and (prev_vm >= SPIKE_THR_MV) and (vm < SPIKE_THR_MV):
+                spike_off_times_ms[li].append(t_rel)
+                spike_active = False
             prev_vm = vm
 
             if k < nt - 1:
                 h.fadvance()
 
         spike_count[li] = np.int32(sc)
+        if spike_active:
+            spike_off_times_ms[li].append(float(t_vec[-1]))
         pbar.update(1)
 
     pbar.close()
@@ -661,7 +679,9 @@ def worker_run(
         "vm_max_mV": vm_max,
         "vm_min_mV": vm_min,
         "spike_count": spike_count,
-        "spike_times_ms": np.array(spike_times_ms, dtype=object),
+        "spike_times_ms": np.array(spike_on_times_ms, dtype=object),
+        "spike_on_times_ms": np.array(spike_on_times_ms, dtype=object),
+        "spike_off_times_ms": np.array(spike_off_times_ms, dtype=object),
         "vm_trace_t_ms": vm_trace_t,
         "vm_trace_0to1ms_mV": vm_trace,
         "spike_thr_mV": float(SPIKE_THR_MV),
@@ -874,7 +894,7 @@ def main() -> None:
         "--workers",
         type=int,
         default=-1,
-        help="Number of worker processes. Default: cpu_count()-4 (min 1).",
+        help="Number of worker processes. Default: cpu_count() (min 1).",
     )
     ap.add_argument(
         "--subset_depth",
@@ -886,14 +906,14 @@ def main() -> None:
         "--gains",
         type=str,
         default=None,
-        help="Comma-separated gradient gains (default: 1,10,...,1e10).",
+        help="Comma-separated gradient gains (ignored in v2; 1x only).",
     )
     ap.add_argument("--keep_tmp", action="store_true", help="Keep temp worker files.")
     ap.add_argument(
         "--cell",
         type=str,
         default=None,
-        help="Comma-separated cell IDs (default: 529898751,529889679,626170547).",
+        help="Comma-separated cell IDs (default: 529898751).",
     )
     ap.add_argument(
         "--sequential",
@@ -908,7 +928,7 @@ def main() -> None:
     if args.workers is not None and int(args.workers) > 0:
         n_workers = int(args.workers)
     else:
-        n_workers = max(1, cpu_total - 4)
+        n_workers = max(1, cpu_total-1)
 
     subset_depth = max(0, int(args.subset_depth))
 
@@ -919,7 +939,7 @@ def main() -> None:
     if not cell_ids:
         raise SystemExit("No cell IDs specified.")
 
-    print("\n=== gradient_allen_v2.py (summary only, spawn mp) ===", flush=True)
+    print("\n=== 7_allen_roi.py (angleoutin summary, spawn mp) ===", flush=True)
     print(f"Cells: {', '.join(cell_ids)}", flush=True)
     print(f"workers={n_workers} (cpu_total={cpu_total})", flush=True)
     print(f"SIM_DT_MS={SIM_DT_MS:.3f} ms (matched to GRAD_DT_MS={GRAD_DT_MS:.3f} ms)", flush=True)
@@ -950,14 +970,10 @@ def main() -> None:
     y = coords_um[:, 1]
     z = coords_um[:, 2]
     y_in = (y >= COIL_REGION_UM["y_min"]) & (y <= COIL_REGION_UM["y_max"])
-    z_in = (z >= COIL_REGION_UM["z_tip_min"]) & (z <= COIL_REGION_UM["z_max"])
-    x_lim = np.where(
-        z <= COIL_REGION_UM["z_shoulder"],
-        COIL_REGION_UM["x_half_max"] * (z - COIL_REGION_UM["z_tip_min"])
-        / (COIL_REGION_UM["z_shoulder"] - COIL_REGION_UM["z_tip_min"]),
-        COIL_REGION_UM["x_half_max"],
-    )
-    inside = y_in & z_in & (np.abs(x) <= x_lim)
+    poly = np.array(COIL_REGION_UM["polygon_xz_vertices"], dtype=np.float64)
+    pentagon = MplPath(poly)
+    xz_in = pentagon.contains_points(np.column_stack([x, z]), radius=1e-9)
+    inside = y_in & xz_in
     outside = ~inside
     coords_out_um = coords_um[outside]
     if coords_out_um.shape[0] == 0:
