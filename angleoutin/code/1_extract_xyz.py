@@ -26,13 +26,14 @@ from multiprocessing import Pool, cpu_count
 
 # --- 1. 경로 및 상수 설정 ---
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-BASE_DIR = os.path.join(os.path.dirname(SCRIPT_DIR), "data", "30V_OUT10_IN20_CI")
+CASE_NAME = os.environ.get("ANGLEOUTIN_CASE", "30V_OUT10_IN20_CI")
+BASE_DIR = os.path.join(os.path.dirname(SCRIPT_DIR), "data", CASE_NAME)
 
-# E-field 폴더 경로 (요청된 data/30V_OUT10_IN20_CI 디렉토리 내)
+# E-field 폴더 경로 (요청된 data/<CASE_NAME> 디렉토리 내)
 EFIELD_BASE_DIR = BASE_DIR
-EX_DIR = os.path.join(EFIELD_BASE_DIR, "30V_OUT10_IN20_CI_Ex")
-EY_DIR = os.path.join(EFIELD_BASE_DIR, "30V_OUT10_IN20_CI_Ey")
-EZ_DIR = os.path.join(EFIELD_BASE_DIR, "30V_OUT10_IN20_CI_Ez")
+EX_DIR = os.path.join(EFIELD_BASE_DIR, f"{CASE_NAME}_Ex")
+EY_DIR = os.path.join(EFIELD_BASE_DIR, f"{CASE_NAME}_Ey")
+EZ_DIR = os.path.join(EFIELD_BASE_DIR, f"{CASE_NAME}_Ez")
 
 # --- Cycle 설정: 1사이클 = 201 파일 (10ms, 50us 간격) ---
 NUM_CYCLES = 1  # 추출할 사이클 수
@@ -58,6 +59,7 @@ os.makedirs(TEMP_DIR, exist_ok=True)
 print("=" * 60)
 print("E-field 데이터 추출 및 검증 스크립트")
 print("=" * 60)
+print(f"케이스 이름: {CASE_NAME}")
 print(f"\n사이클 설정: {NUM_CYCLES} cycle(s), {STEPS_PER_CYCLE} steps/cycle → 총 {TOTAL_STEPS} time steps")
 print(f"기준 디렉토리: {BASE_DIR}")
 print(f"Ex 경로: {EX_DIR}")

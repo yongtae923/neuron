@@ -22,7 +22,8 @@ from matplotlib.path import Path as MplPath
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-DATA_DIR = SCRIPT_DIR.parent / "data" / "30V_OUT10_IN20_CI"
+CASE_NAME = os.environ.get("ANGLEOUTIN_CASE", "30V_OUT10_IN20_CI")
+DATA_DIR = SCRIPT_DIR.parent / "data" / CASE_NAME
 SPEC_PATH = DATA_DIR / "0_grid_time_spec.json"
 INPUT_EFIELD_PATH = DATA_DIR / "1_E_field_1cycle.npy"
 INPUT_COORDS_PATH = DATA_DIR / "1_E_field_grid_coords.npy"
@@ -89,6 +90,7 @@ def _build_surface_shell_mask(coil_mask: np.ndarray) -> np.ndarray:
 
 
 def main() -> None:
+    print(f"Case name: {CASE_NAME}")
     if not SPEC_PATH.exists():
         raise FileNotFoundError(f"Missing spec file: {SPEC_PATH}")
     if not INPUT_EFIELD_PATH.exists():

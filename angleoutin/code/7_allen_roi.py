@@ -76,6 +76,8 @@ else:
 # Config (default)
 # =========================
 
+CASE_NAME = os.environ.get("ANGLEOUTIN_CASE", "30V_OUT10_IN20_CI")
+
 CELL_IDS = (
     "529898751",
     # "529889679",
@@ -83,7 +85,7 @@ CELL_IDS = (
     # "497232735",
 )
 
-DATA_DIR = os.path.join(os.path.dirname(SCRIPT_DIR), "data", "30V_OUT10_IN20_CI")
+DATA_DIR = os.path.join(os.path.dirname(SCRIPT_DIR), "data", CASE_NAME)
 SPEC_PATH = os.path.join(DATA_DIR, "0_grid_time_spec.json")
 ROI_PATH = os.path.join(DATA_DIR, "0_roi.json")
 
@@ -940,6 +942,7 @@ def main() -> None:
         raise SystemExit("No cell IDs specified.")
 
     print("\n=== 7_allen_roi.py (angleoutin summary, spawn mp) ===", flush=True)
+    print(f"Case: {CASE_NAME}", flush=True)
     print(f"Cells: {', '.join(cell_ids)}", flush=True)
     print(f"workers={n_workers} (cpu_total={cpu_total})", flush=True)
     print(f"SIM_DT_MS={SIM_DT_MS:.3f} ms (matched to GRAD_DT_MS={GRAD_DT_MS:.3f} ms)", flush=True)

@@ -46,9 +46,10 @@ h.load_file("stdrun.hoc")
 # =========================
 # Config
 # =========================
+CASE_NAME = os.environ.get("ANGLEOUTIN_CASE", "30V_OUT10_IN20_CI")
 CELL_ID = "529898751"
 
-DATA_DIR = os.path.join(os.path.dirname(SCRIPT_DIR), "data", "30V_OUT10_IN20_CI")
+DATA_DIR = os.path.join(os.path.dirname(SCRIPT_DIR), "data", CASE_NAME)
 SPEC_PATH = os.path.join(DATA_DIR, "0_grid_time_spec.json")
 POSITIONS_PATH = os.path.join(DATA_DIR, "0_allen_4points.json")
 GRAD_VALUES_FILE = os.path.join(DATA_DIR, "3_gradient_1cycle.npy")
@@ -447,7 +448,8 @@ def main() -> None:
     args = ap.parse_args()
     gains = parse_gains(args.gains)
 
-    print("\n=== gradient_four.py ===")
+    print("\n=== 5_allen_4points.py ===")
+    print("Case:", CASE_NAME)
     print("Cell ID:", CELL_ID)
     print("Gradient file:", GRAD_VALUES_FILE)
     print("Grid file:    ", E_GRID_COORDS_FILE)

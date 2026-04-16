@@ -18,12 +18,14 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.widgets import Slider, RadioButtons, CheckButtons
 from scipy.ndimage import gaussian_filter
+from pathlib import Path
 
 # =========================
 # 1) Load data (memory-mapped)
 # =========================
-G_PATH = "data/gradient/grad_Exdx_Eydy_Ezdz_1cycle.npy"
-C_PATH = "efield/old_2025/E_field_grid_coords.npy"
+SCRIPT_DIR = Path(__file__).resolve().parent
+G_PATH = SCRIPT_DIR / "data" / "gradient" / "grad_Exdx_Eydy_Ezdz_1cycle.npy"
+C_PATH = SCRIPT_DIR / "efield" / "old_2025" / "E_field_grid_coords.npy"
 
 G = np.load(G_PATH, mmap_mode="r")    # shape: (3, nx, ny, nz, T)
 coords = np.load(C_PATH)              # shape: (N_spatial, 3)
