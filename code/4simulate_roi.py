@@ -79,7 +79,7 @@ E_GRID_COORDS_FILE = os.path.join(
     BASE_DIR, "efield", "400us_50Hz_10umspaing_100mA", "E_field_grid_coords.npy"
 )
 
-OUTPUT_DIR = os.path.join(BASE_DIR, "data", "4_output", "400us_50Hz_10umspaing_100mA")
+OUTPUT_DIR = os.path.join(BASE_DIR, "efield", "30V_OUT10_IN20_CI")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 
@@ -114,23 +114,19 @@ ROI_BOUNDS_UM = {
 }
 
 # Coil region in um (excluded region)
-# Pentagonal prism:
-# Face (y=-32): (-79.5,561), (0,498), (79.5,561), (79.5,1502), (-79.5,1502) in (x,z)
-# Other face at y=+32 with same (x,z)
+# Match code/2gradient.py and code/1extract_xyz.py
+COIL_POLY_RAW_XZ_UM = np.array([
+    [-85.0, -382.0],
+    [0.0, -530.0],
+    [85.0, -382.0],
+], dtype=np.float64)
+
+COIL_Y_RAW_UM = (-21.25, 26.75)
+
 COIL_REGION_UM = {
-    "y_min": -32.0,
-    "y_max": 32.0,
-    "z_tip_min": 498.0,
-    "z_shoulder": 561.0,
-    "z_max": 1502.0,
-    "x_half_max": 79.5,
-    "polygon_xz_vertices": [
-        (-79.5, 561.0),
-        (0.0, 498.0),
-        (79.5, 561.0),
-        (79.5, 1502.0),
-        (-79.5, 1502.0),
-    ],
+    "y_min": COIL_Y_RAW_UM[0],
+    "y_max": COIL_Y_RAW_UM[1],
+    "polygon_xz_vertices": COIL_POLY_RAW_XZ_UM.tolist(),
 }
 
 # Equilibrium
@@ -197,6 +193,58 @@ def gain_tag_for_filename(grad_gain: float) -> str:
     return re.sub(r"[^0-9A-Za-z]+", "_", str(g))
 
 
+def outward_round_scalar_um(v: float, step_um: float = 5.0) -> float:
+    if v > 0:
+        return math.ceil(v / step_um) * step_um
+    if v < 0:
+        return math.floor(v / step_um) * step_um
+    return 0.0
+
+
+def outward_round_points_xz(points_um: np.ndarray, step_um: float = 5.0) -> np.ndarray:
+    out = np.empty_like(points_um, dtype=np.float64)
+    for i in range(points_um.shape[0]):
+        out[i, 0] = outward_round_scalar_um(float(points_um[i, 0]), step_um)
+        out[i, 1] = outward_round_scalar_um(float(points_um[i, 1]), step_um)
+    return out
+
+
+def points_in_polygon(x: np.ndarray, z: np.ndarray, poly_xz: np.ndarray) -> np.ndarray:
+    inside = np.zeros(x.shape, dtype=bool)
+    boundary = np.zeros(x.shape, dtype=bool)
+    px = poly_xz[:, 0]
+    pz = poly_xz[:, 1]
+    n = len(poly_xz)
+    eps = 1e-12
+
+    for i in range(n):
+        j = (i + 1) % n
+        x1, z1 = float(px[i]), float(pz[i])
+        x2, z2 = float(px[j]), float(pz[j])
+        dx = x2 - x1
+        dz = z2 - z1
+
+        cross = (x - x1) * dz - (z - z1) * dx
+        on_line = np.abs(cross) <= eps
+        within_x = ((x >= min(x1, x2) - eps) & (x <= max(x1, x2) + eps))
+        within_z = ((z >= min(z1, z2) - eps) & (z <= max(z1, z2) + eps))
+        boundary |= on_line & within_x & within_z
+
+        cond = ((z1 > z) != (z2 > z))
+        xinters = np.where(np.abs(z2 - z1) > eps, (x2 - x1) * (z - z1) / (z2 - z1) + x1, x1)
+        inside ^= cond & (x < xinters)
+
+    return inside | boundary
+
+
+def build_coil_polygon_xz(z_max_um: float) -> np.ndarray:
+    raw = np.vstack([
+        COIL_POLY_RAW_XZ_UM,
+        np.array([[85.0, z_max_um], [-85.0, z_max_um]], dtype=np.float64),
+    ])
+    return outward_round_points_xz(raw, 5.0)
+
+
 # =========================
 # Worker code
 # =========================
@@ -238,16 +286,19 @@ def worker_run(
         x = coords_um[:, 0]
         y = coords_um[:, 1]
         z = coords_um[:, 2]
-        y_in = (y >= COIL_REGION_UM["y_min"]) & (y <= COIL_REGION_UM["y_max"])
-        z_in = (z >= COIL_REGION_UM["z_tip_min"]) & (z <= COIL_REGION_UM["z_max"])
-        x_lim = np.where(
-            z <= COIL_REGION_UM["z_shoulder"],
-            COIL_REGION_UM["x_half_max"] * (z - COIL_REGION_UM["z_tip_min"])
-            / (COIL_REGION_UM["z_shoulder"] - COIL_REGION_UM["z_tip_min"]),
-            COIL_REGION_UM["x_half_max"],
+        y_lo = outward_round_scalar_um(COIL_Y_RAW_UM[0])
+        y_hi = outward_round_scalar_um(COIL_Y_RAW_UM[1])
+        y_in = (y >= y_lo) & (y <= y_hi)
+        poly_xz = build_coil_polygon_xz(float(np.max(z)))
+        h = 2.5
+        inside_xz = (
+            points_in_polygon(x, z, poly_xz)
+            | points_in_polygon(x + h, z, poly_xz)
+            | points_in_polygon(x - h, z, poly_xz)
+            | points_in_polygon(x, z + h, poly_xz)
+            | points_in_polygon(x, z - h, poly_xz)
         )
-        xz_in = z_in & (np.abs(x) <= x_lim)
-        return y_in & xz_in
+        return y_in & inside_xz
 
     def xyz_at_seg_linear(sec, segx: float) -> Tuple[float, float, float]:
         n = int(h.n3d(sec=sec))
@@ -707,7 +758,7 @@ def _run_for_cell(
     for grad_gain in gains:
         print(f"\n--- Cell {cell_id} | gain {grad_gain:g}x ---", flush=True)
         gain_tag = gain_tag_for_filename(float(grad_gain))
-        out_name = f"cell{cell_id}_{gain_tag}_100mA_allpoints_gradient.npy"
+        out_name = f"4_cell{cell_id}_{gain_tag}_100mA_allpoints_gradient.npy"
         out_path = os.path.join(OUTPUT_DIR, out_name)
         if os.path.exists(out_path):
             print(f"Skip existing output: {out_path}", flush=True)
@@ -957,15 +1008,19 @@ def main() -> None:
     x = coords_um[:, 0]
     y = coords_um[:, 1]
     z = coords_um[:, 2]
-    y_in = (y >= COIL_REGION_UM["y_min"]) & (y <= COIL_REGION_UM["y_max"])
-    z_in = (z >= COIL_REGION_UM["z_tip_min"]) & (z <= COIL_REGION_UM["z_max"])
-    x_lim = np.where(
-        z <= COIL_REGION_UM["z_shoulder"],
-        COIL_REGION_UM["x_half_max"] * (z - COIL_REGION_UM["z_tip_min"])
-        / (COIL_REGION_UM["z_shoulder"] - COIL_REGION_UM["z_tip_min"]),
-        COIL_REGION_UM["x_half_max"],
+    y_lo = outward_round_scalar_um(COIL_Y_RAW_UM[0])
+    y_hi = outward_round_scalar_um(COIL_Y_RAW_UM[1])
+    y_in = (y >= y_lo) & (y <= y_hi)
+    poly_xz = build_coil_polygon_xz(float(np.max(z)))
+    h = 2.5
+    inside_xz = (
+        points_in_polygon(x, z, poly_xz)
+        | points_in_polygon(x + h, z, poly_xz)
+        | points_in_polygon(x - h, z, poly_xz)
+        | points_in_polygon(x, z + h, poly_xz)
+        | points_in_polygon(x, z - h, poly_xz)
     )
-    inside = y_in & z_in & (np.abs(x) <= x_lim)
+    inside = y_in & inside_xz
     outside = ~inside
     coords_out_um = coords_um[outside]
     if coords_out_um.shape[0] == 0:
@@ -1003,7 +1058,7 @@ def main() -> None:
         all_exist = True
         for g in gains:
             gain_tag = gain_tag_for_filename(float(g))
-            out_path = os.path.join(OUTPUT_DIR, f"v2_allpoints_gradient_{gain_tag}x_cell{cid}.npy")
+            out_path = os.path.join(OUTPUT_DIR, f"4_v2_allpoints_gradient_{gain_tag}x_cell{cid}.npy")
             if not os.path.exists(out_path):
                 all_exist = False
                 break

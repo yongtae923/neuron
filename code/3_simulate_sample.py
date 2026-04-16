@@ -17,7 +17,7 @@ Input:
             G shape (T, Nx, Ny, Nz, 3), x_um, y_um, z_um, t_us
 
 Output:
-  - output/600us_50Hz_10umspaing_100mA/*.npy
+    - efield/30V_OUT10_IN20_CI/3_*.npy
 ------------------------------------------------------------
 """
 
@@ -28,6 +28,7 @@ import re
 import math
 import sys
 import argparse
+import multiprocessing as mp
 from dataclasses import dataclass
 from typing import Dict, List, Tuple
 from pathlib import Path
@@ -36,6 +37,29 @@ from pathlib import Path
 SCRIPT_DIR = Path(__file__).parent
 BASE_DIR = SCRIPT_DIR.parent
 sys.path.insert(0, str(BASE_DIR))
+
+
+def configure_cpu_threads() -> int:
+    cpu_count = os.cpu_count() or 1
+    budget_threads = max(1, int(cpu_count * 0.9))
+    try:
+        mp_workers = max(1, int(os.environ.get("SIM_MP_WORKERS", "1")))
+    except Exception:
+        mp_workers = 1
+    target_threads = max(1, budget_threads // mp_workers)
+    for key in (
+        "OMP_NUM_THREADS",
+        "MKL_NUM_THREADS",
+        "OPENBLAS_NUM_THREADS",
+        "NUMEXPR_NUM_THREADS",
+        "VECLIB_MAXIMUM_THREADS",
+        "BLIS_NUM_THREADS",
+    ):
+        os.environ.setdefault(key, str(target_threads))
+    return target_threads
+
+
+CPU_THREADS = configure_cpu_threads()
 
 import numpy as np
 from scipy.spatial import cKDTree
@@ -61,7 +85,7 @@ BASE_DIR = SCRIPT_DIR.parent  # D:\yongtae\neuron
 FOLDER_NAME = "30V_OUT10_IN20_CI"
 
 GRADIENT_NPZ_FILE = BASE_DIR / "efield" / FOLDER_NAME / "2gradient.npz"
-OUTPUT_DIR = BASE_DIR / "output" / FOLDER_NAME
+OUTPUT_DIR = BASE_DIR / "efield" / FOLDER_NAME
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 # Gradient timing
@@ -87,30 +111,24 @@ GAIN_TO_MA = {
 
 # 4 target positions (um)
 POSITIONS_UM = [
-    (80.0, 0.0, 550.0),
-    (80.0, 35.0, 550.0),
-    (0.0, 35.0, 550.0),
-    (0.0, 0.0, 0.0),
+    (0.0, 40.0, -530.0),
+    (0.0, 40.0, -400.0),
+    (50.0, 0.0, -400.0),
+    (200.0, 200.0, -250.0),
 ]
 
 # Coil region in um (excluded from KDTree mapping)
-# Pentagonal prism:
-# Face (y=-32): (-79.5,561), (0,498), (79.5,561), (79.5,1502), (-79.5,1502) in (x,z)
-# Other face at y=+32 with same (x,z)
+# Match code/2gradient.py and code/1extract_xyz.py
+COIL_POLY_RAW_XZ_UM = np.array([
+    [-85.0, -382.0],
+    [0.0, -530.0],
+    [85.0, -382.0],
+], dtype=np.float64)
+
+COIL_Y_RAW_UM = (-21.25, 26.75)
 COIL_REGION_UM = {
-    "y_min": -32.0,
-    "y_max": 32.0,
-    "z_tip_min": 498.0,
-    "z_shoulder": 561.0,
-    "z_max": 1502.0,
-    "x_half_max": 79.5,
-    "polygon_xz_vertices": [
-        (-79.5, 561.0),
-        (0.0, 498.0),
-        (79.5, 561.0),
-        (79.5, 1502.0),
-        (-79.5, 1502.0),
-    ],
+    "poly_raw_xz_um": COIL_POLY_RAW_XZ_UM.tolist(),
+    "y_range_raw_um": [float(COIL_Y_RAW_UM[0]), float(COIL_Y_RAW_UM[1])],
 }
 
 # SaveState equilibrium
@@ -125,21 +143,79 @@ MAPCHECK_PRINT_FIRST_NSECS = 5
 # =========================
 # Helpers
 # =========================
+def outward_round_scalar_um(v: float, step_um: float = 5.0) -> float:
+    if v > 0:
+        return math.ceil(v / step_um) * step_um
+    if v < 0:
+        return math.floor(v / step_um) * step_um
+    return 0.0
+
+
+def outward_round_points_xz(points_um: np.ndarray, step_um: float = 5.0) -> np.ndarray:
+    out = np.empty_like(points_um, dtype=np.float64)
+    for i in range(points_um.shape[0]):
+        out[i, 0] = outward_round_scalar_um(float(points_um[i, 0]), step_um)
+        out[i, 1] = outward_round_scalar_um(float(points_um[i, 1]), step_um)
+    return out
+
+
+def points_in_polygon(x: np.ndarray, z: np.ndarray, poly_xz: np.ndarray) -> np.ndarray:
+    inside = np.zeros(x.shape, dtype=bool)
+    boundary = np.zeros(x.shape, dtype=bool)
+    px = poly_xz[:, 0]
+    pz = poly_xz[:, 1]
+    n = len(poly_xz)
+    eps = 1e-12
+
+    for i in range(n):
+        j = (i + 1) % n
+        x1, z1 = float(px[i]), float(pz[i])
+        x2, z2 = float(px[j]), float(pz[j])
+        dx = x2 - x1
+        dz = z2 - z1
+
+        cross = (x - x1) * dz - (z - z1) * dx
+        on_line = np.abs(cross) <= eps
+        within_x = ((x >= min(x1, x2) - eps) & (x <= max(x1, x2) + eps))
+        within_z = ((z >= min(z1, z2) - eps) & (z <= max(z1, z2) + eps))
+        boundary |= on_line & within_x & within_z
+
+        cond = ((z1 > z) != (z2 > z))
+        denom_ok = abs(z2 - z1) > eps
+        xinters = np.full(x.shape, x1, dtype=np.float64)
+        if denom_ok:
+            xinters = (x2 - x1) * (z - z1) / (z2 - z1) + x1
+        inside ^= cond & (x < xinters)
+
+    return inside | boundary
+
+
+def build_coil_polygon_xz(z_max_um: float) -> np.ndarray:
+    raw = np.vstack([
+        COIL_POLY_RAW_XZ_UM,
+        np.array([[85.0, z_max_um], [-85.0, z_max_um]], dtype=np.float64),
+    ])
+    return outward_round_points_xz(raw, 5.0)
+
+
 def coil_inside_mask(coords_um: np.ndarray) -> np.ndarray:
     x = coords_um[:, 0]
     y = coords_um[:, 1]
     z = coords_um[:, 2]
-    y_in = (y >= COIL_REGION_UM["y_min"]) & (y <= COIL_REGION_UM["y_max"])
-    z_in = (z >= COIL_REGION_UM["z_tip_min"]) & (z <= COIL_REGION_UM["z_max"])
-    x_lim = np.where(
-        z <= COIL_REGION_UM["z_shoulder"],
-        COIL_REGION_UM["x_half_max"] * (z - COIL_REGION_UM["z_tip_min"])
-        / (COIL_REGION_UM["z_shoulder"] - COIL_REGION_UM["z_tip_min"]),
-        COIL_REGION_UM["x_half_max"],
+    y_lo, y_hi = outward_round_scalar_um(COIL_Y_RAW_UM[0]), outward_round_scalar_um(COIL_Y_RAW_UM[1])
+    y_in = (y >= y_lo) & (y <= y_hi)
+    poly_xz = build_coil_polygon_xz(float(np.max(z)))
+    h = 2.5
+    xx = x
+    zz = z
+    inside_xz = (
+        points_in_polygon(xx, zz, poly_xz)
+        | points_in_polygon(xx + h, zz, poly_xz)
+        | points_in_polygon(xx - h, zz, poly_xz)
+        | points_in_polygon(xx, zz + h, poly_xz)
+        | points_in_polygon(xx, zz - h, poly_xz)
     )
-    xz_in = z_in & (np.abs(x) <= x_lim)
-    inside = y_in & xz_in
-    return inside
+    return y_in & inside_xz
 
 
 def xyz_at_seg_linear(sec, segx: float) -> Tuple[float, float, float]:
@@ -451,21 +527,24 @@ def gain_tag(v: float) -> str:
 # =========================
 # Main
 # =========================
-def main() -> None:
-    ap = argparse.ArgumentParser()
-    ap.add_argument(
-        "--gains",
-        type=str,
-        default=DEFAULT_GAINS_STR,
-        help=f"Comma-separated gradient gains (default: {DEFAULT_GAINS_STR})",
-    )
-    args = ap.parse_args()
-    gains = parse_gains(args.gains)
+def _resolve_workers(requested_workers: int, n_tasks: int) -> int:
+    if n_tasks <= 1:
+        return 1
+    auto_workers = max(1, int((os.cpu_count() or 1) * 0.9))
+    if requested_workers <= 0:
+        return max(1, min(auto_workers, n_tasks))
+    return max(1, min(int(requested_workers), n_tasks))
+
+
+def simulate_for_gains(gains: List[float]) -> None:
+    global GRAD_DT_MS, GRAD_GAIN
 
     print("\n=== 3_simulate_sample.py ===")
+    print(f"PID: {os.getpid()}")
     print("Cell ID:", CELL_ID)
     print("Gradient NPZ:", GRADIENT_NPZ_FILE)
     print("Gradient gains:", ", ".join(f"{g:g}x" for g in gains))
+    print(f"CPU thread target (per process): {CPU_THREADS}")
 
     if not os.path.exists(GRADIENT_NPZ_FILE):
         raise FileNotFoundError(f"Missing gradient npz file: {GRADIENT_NPZ_FILE}")
@@ -504,7 +583,6 @@ def main() -> None:
     if t_us.size >= 2:
         grad_dt_ms_from_npz = float(np.min(np.diff(t_us))) * 1e-3
         if grad_dt_ms_from_npz > 0:
-            global GRAD_DT_MS
             GRAD_DT_MS = grad_dt_ms_from_npz
     print(f"Gradient dt: {GRAD_DT_MS:.3f} ms, sim dt: {SIM_DT_MS:.3f} ms")
 
@@ -572,15 +650,13 @@ def main() -> None:
     ss.save()
     print("SaveState saved.\n")
 
-    global GRAD_GAIN
-
     for gain in gains:
         GRAD_GAIN = float(gain)
         tag = gain_tag(GRAD_GAIN)
         ma_label = GAIN_TO_MA.get(GRAD_GAIN, None)
         if ma_label is None:
             ma_label = int(GRAD_GAIN * 100)  # fallback
-        out_path = OUTPUT_DIR / f"{tag}x_cell{CELL_ID}_{ma_label}mA_gradient_sanity.npy"
+        out_path = OUTPUT_DIR / f"3_{tag}x_cell{CELL_ID}_{ma_label}mA_gradient_sanity.npy"
         if os.path.exists(out_path):
             print(f"[SKIP] Existing output for gain={GRAD_GAIN:g}x ({ma_label} mA): {out_path}")
             continue
@@ -670,5 +746,44 @@ def main() -> None:
     print("\nDone.")
 
 
+def _worker_entry(gain: float) -> None:
+    simulate_for_gains([float(gain)])
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser()
+    ap.add_argument(
+        "--gains",
+        type=str,
+        default=DEFAULT_GAINS_STR,
+        help=f"Comma-separated gradient gains (default: {DEFAULT_GAINS_STR})",
+    )
+    ap.add_argument(
+        "--workers",
+        type=int,
+        default=0,
+        help="Worker process count across gains (0=auto, 1=disable multiprocessing)",
+    )
+    args = ap.parse_args()
+    gains = parse_gains(args.gains)
+    workers = _resolve_workers(args.workers, len(gains))
+
+    # Keep total CPU usage around 90% across all processes.
+    os.environ["SIM_MP_WORKERS"] = str(workers)
+    global CPU_THREADS
+    CPU_THREADS = configure_cpu_threads()
+
+    if workers <= 1:
+        print("Multiprocessing: disabled (single process)")
+        simulate_for_gains(gains)
+        return
+
+    print(f"Multiprocessing: enabled (workers={workers}, tasks={len(gains)})")
+    ctx = mp.get_context("spawn")
+    with ctx.Pool(processes=workers) as pool:
+        pool.map(_worker_entry, [float(g) for g in gains])
+
+
 if __name__ == "__main__":
+    mp.freeze_support()
     main()
