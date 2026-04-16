@@ -1,28 +1,27 @@
 # D:\yongtae\neuron\angleoutin\code\5_allen_4points.py
 
 """
-gradient_four.py
-------------------------------------------------------------
-4-position sanity simulation with Allen cell model + gradient-driven extracellular forcing.
+주의:
+- WSL을 사용해야 합니다. neuron 모듈은 Linux 기반으로 설계되었습니다.
 
-This script follows the overall structure of simulate_four_v2.py, but replaces
-E-field input with directional gradient input:
-  Gxx = dEx/dx, Gyy = dEy/dy, Gzz = dEz/dz
+기능:
+- Allen cell 다중 위치에 대해 gradient-driven extracellular forcing을 계산합니다.
 
-Input:
-  - data/gradient/grad_Exdx_Eydy_Ezdz_1cycle.npy, shape (3, Nx, Ny, Nz, Nt)
-  - efield/E_field_grid_coords.npy, shape (N_spatial, 3) in meters
+입출력:
+- 입력: data/30V_OUT10_IN20_CI/3_gradient_1cycle.npy, 1_E_field_grid_coords.npy, 0_grid_time_spec.json, 0_allen_4points.json
+- 출력: data/30V_OUT10_IN20_CI/5_gradient_output/*.npy
 
-Output:
-  - data/gradient_output/*.npy
-------------------------------------------------------------
+실행 방법:
+- python 5_allen_4points.py
 """
 
 from __future__ import annotations
 
 import os
+import json
 import re
 import math
+import sys
 import argparse
 from dataclasses import dataclass
 from typing import Dict, List, Tuple
@@ -34,6 +33,11 @@ from tqdm import tqdm
 from neuron import h
 from neuron.units import ms, mV
 
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_ROOT = os.path.dirname(os.path.dirname(SCRIPT_DIR))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
+
 from model_allen_neuron import AllenNeuronModel
 
 h.load_file("stdrun.hoc")
@@ -44,13 +48,13 @@ h.load_file("stdrun.hoc")
 # =========================
 CELL_ID = "529898751"
 
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-GRAD_VALUES_FILE = os.path.join(
-    SCRIPT_DIR, "data", "gradient", "grad_Exdx_Eydy_Ezdz_1cycle.npy"
-)
-E_GRID_COORDS_FILE = os.path.join(SCRIPT_DIR, "efield", "E_field_grid_coords.npy")
+DATA_DIR = os.path.join(os.path.dirname(SCRIPT_DIR), "data", "30V_OUT10_IN20_CI")
+SPEC_PATH = os.path.join(DATA_DIR, "0_grid_time_spec.json")
+POSITIONS_PATH = os.path.join(DATA_DIR, "0_allen_4points.json")
+GRAD_VALUES_FILE = os.path.join(DATA_DIR, "3_gradient_1cycle.npy")
+E_GRID_COORDS_FILE = os.path.join(DATA_DIR, "1_E_field_grid_coords.npy")
 
-OUTPUT_DIR = os.path.join(SCRIPT_DIR, "data", "gradient_output")
+OUTPUT_DIR = os.path.join(DATA_DIR, "5_gradient_output")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 # Gradient timing
@@ -66,32 +70,38 @@ DEFAULT_GAINS = tuple([10.0 ** k for k in range(0, 11)])  # 1 ~ 1e10
 DEFAULT_GAINS_STR = ",".join(["1"] + [f"1e{k}" for k in range(1, 11)])
 GRAD_GAIN = 1.0
 
-# 4 target positions (um)
-POSITIONS_UM = [
-    (80.0, 0.0, 550.0),
-    (80.0, 35.0, 550.0),
-    (0.0, 35.0, 550.0),
-    (0.0, 0.0, 0.0),
-]
+def load_positions_from_json(path: str) -> Tuple[List[Tuple[float, float, float]], List[str]]:
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"Missing positions file: {path}")
+    with open(path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    items = data.get("positions", [])
+    if not items:
+        raise ValueError("positions JSON has no 'positions' entries.")
 
-# Coil region in um (excluded from KDTree mapping)
-# Pentagonal prism:
-# Face (y=-32): (-79.5,561), (0,498), (79.5,561), (79.5,1502), (-79.5,1502) in (x,z)
-# Other face at y=+32 with same (x,z)
+    positions: List[Tuple[float, float, float]] = []
+    labels: List[str] = []
+    for idx, item in enumerate(items):
+        x = float(item["x"])
+        y = float(item["y"])
+        z = float(item["z"])
+        label = str(item.get("label", f"P{idx+1}"))
+        positions.append((x, y, z))
+        labels.append(label)
+
+    return positions, labels
+
+
+POSITIONS_UM, POSITION_LABELS = load_positions_from_json(POSITIONS_PATH)
+
+# Coil mask from shared spec (um)
+with open(SPEC_PATH, "r", encoding="utf-8") as f:
+    SPEC = json.load(f)
+
 COIL_REGION_UM = {
-    "y_min": -32.0,
-    "y_max": 32.0,
-    "z_tip_min": 498.0,
-    "z_shoulder": 561.0,
-    "z_max": 1502.0,
-    "x_half_max": 79.5,
-    "polygon_xz_vertices": [
-        (-79.5, 561.0),
-        (0.0, 498.0),
-        (79.5, 561.0),
-        (79.5, 1502.0),
-        (-79.5, 1502.0),
-    ],
+    "y_min": float(SPEC["coil_mask_um"]["y"]["min"]),
+    "y_max": float(SPEC["coil_mask_um"]["y"]["max"]),
+    "polygon_xz_vertices": [tuple(v) for v in SPEC["coil_mask_um"]["polygon_xz"]],
 }
 
 # SaveState equilibrium
@@ -111,14 +121,10 @@ def coil_inside_mask(coords_um: np.ndarray) -> np.ndarray:
     y = coords_um[:, 1]
     z = coords_um[:, 2]
     y_in = (y >= COIL_REGION_UM["y_min"]) & (y <= COIL_REGION_UM["y_max"])
-    z_in = (z >= COIL_REGION_UM["z_tip_min"]) & (z <= COIL_REGION_UM["z_max"])
-    x_lim = np.where(
-        z <= COIL_REGION_UM["z_shoulder"],
-        COIL_REGION_UM["x_half_max"] * (z - COIL_REGION_UM["z_tip_min"])
-        / (COIL_REGION_UM["z_shoulder"] - COIL_REGION_UM["z_tip_min"]),
-        COIL_REGION_UM["x_half_max"],
-    )
-    xz_in = z_in & (np.abs(x) <= x_lim)
+    poly = np.array(COIL_REGION_UM["polygon_xz_vertices"], dtype=np.float64)
+    from matplotlib.path import Path as MplPath
+    pentagon = MplPath(poly)
+    xz_in = pentagon.contains_points(np.column_stack([x, z]), radius=1e-9)
     inside = y_in & xz_in
     return inside
 
@@ -446,6 +452,8 @@ def main() -> None:
     print("Gradient file:", GRAD_VALUES_FILE)
     print("Grid file:    ", E_GRID_COORDS_FILE)
     print("Gradient gains:", ", ".join(f"{g:g}x" for g in gains))
+    print("Positions file:", POSITIONS_PATH)
+    print("Targets:", ", ".join(POSITION_LABELS))
 
     if not os.path.exists(GRAD_VALUES_FILE):
         raise FileNotFoundError(f"Missing gradient file: {GRAD_VALUES_FILE}")
@@ -481,17 +489,18 @@ def main() -> None:
     tree_out = cKDTree(coords_out_um)
     print("KDTree built on OUTSIDE points only.")
 
-    print("\n=== Build 4 neurons and place to targets ===")
+    print(f"\n=== Build {len(POSITIONS_UM)} neurons and place to targets ===")
     neurons: List[AllenNeuronModel] = []
     caches: List[Dict] = []
     topos: List[Dict] = []
 
     for i, (tx, ty, tz) in enumerate(POSITIONS_UM):
+        label = POSITION_LABELS[i]
         neuron = AllenNeuronModel(x=0.0, y=0.0, z=0.0, cell_id=CELL_ID)
         sx, sy, sz = xyz_at_seg_linear(neuron.soma, 0.5)
         translate_morphology(neuron.all, tx - sx, ty - sy, tz - sz)
         sx2, sy2, sz2 = xyz_at_seg_linear(neuron.soma, 0.5)
-        print(f"Neuron {i+1}: target=({tx:.1f},{ty:.1f},{tz:.1f}) um, soma~({sx2:.1f},{sy2:.1f},{sz2:.1f}) um")
+        print(f"Neuron {i+1} ({label}): target=({tx:.1f},{ty:.1f},{tz:.1f}) um, soma~({sx2:.1f},{sy2:.1f},{sz2:.1f}) um")
         neurons.append(neuron)
 
     print("\n=== Build morphology caches (OUTSIDE-only mapping) ===")
@@ -502,8 +511,8 @@ def main() -> None:
         print(f"Neuron {i+1}: cache ready")
 
     print("\n=== Mapping sanity checks (must be 0% coil-inside) ===")
-    for i in range(4):
-        report_mapping_sanity_for_neuron(caches[i], inside, label=f"N{i+1}")
+    for i in range(len(neurons)):
+        report_mapping_sanity_for_neuron(caches[i], inside, label=f"N{i+1}_{POSITION_LABELS[i]}")
 
     print("\n=== Equilibrium run (forcing OFF), SaveState.save() from Neuron 1 ===")
     h.dt = EQ_DT_MS * ms
@@ -593,7 +602,9 @@ def main() -> None:
         payload = {
             "cell_id": CELL_ID,
             "positions_um": np.array(POSITIONS_UM, dtype=np.float64),
+            "position_labels": np.array(POSITION_LABELS),
             "coil_region_um": COIL_REGION_UM,
+            "positions_file": POSITIONS_PATH,
             "gradient_values_file": GRAD_VALUES_FILE,
             "efield_grid_file": E_GRID_COORDS_FILE,
             "gradient_dt_ms": GRAD_DT_MS,

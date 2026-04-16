@@ -5,7 +5,7 @@
 - Gradient(dEx/dx, dEy/dy, dEz/dz, |grad|)를 XY/YZ/ZX 슬라이스로 인터랙티브 시각화합니다.
 
 입출력:
-- 입력: data/30V_OUT10_IN20_CI/2_gradient_1cycle.npy, 1_E_field_grid_coords.npy, 0_grid_time_spec.json
+- 입력: data/30V_OUT10_IN20_CI/3_gradient_1cycle.npy, 1_E_field_grid_coords.npy, 0_grid_time_spec.json
 - 출력: 화면 표시(파일 저장 없음)
 
 실행 방법:
@@ -26,7 +26,7 @@ from scipy.ndimage import gaussian_filter
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(os.path.dirname(SCRIPT_DIR), "data", "30V_OUT10_IN20_CI")
 SPEC_PATH = os.path.join(DATA_DIR, "0_grid_time_spec.json")
-G_PATH = os.path.join(DATA_DIR, "2_gradient_1cycle.npy")
+G_PATH = os.path.join(DATA_DIR, "3_gradient_1cycle.npy")
 C_PATH = os.path.join(DATA_DIR, "1_E_field_grid_coords.npy")
 
 with open(SPEC_PATH, "r", encoding="utf-8") as f:

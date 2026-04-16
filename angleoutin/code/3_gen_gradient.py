@@ -6,7 +6,7 @@
 
 입출력:
 - 입력: data/30V_OUT10_IN20_CI/1_E_field_1cycle.npy, 1_E_field_grid_coords.npy, 0_grid_time_spec.json
-- 출력: data/30V_OUT10_IN20_CI/2_gradient_1cycle.npy
+- 출력: data/30V_OUT10_IN20_CI/3_gradient_1cycle.npy
 
 실행 방법:
 - python 3_gen_gradient.py
@@ -26,8 +26,8 @@ DATA_DIR = SCRIPT_DIR.parent / "data" / "30V_OUT10_IN20_CI"
 SPEC_PATH = DATA_DIR / "0_grid_time_spec.json"
 INPUT_EFIELD_PATH = DATA_DIR / "1_E_field_1cycle.npy"
 INPUT_COORDS_PATH = DATA_DIR / "1_E_field_grid_coords.npy"
-OUTPUT_DIR = DATA_DIR / "gradient"
-OUTPUT_PATH = DATA_DIR / "2_gradient_1cycle.npy"
+OUTPUT_DIR = DATA_DIR / "3_gradient"
+OUTPUT_PATH = DATA_DIR / "3_gradient_1cycle.npy"
 
 
 def _build_axis_and_indices(coords: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
