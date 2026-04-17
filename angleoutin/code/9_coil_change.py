@@ -2,9 +2,10 @@
 
 """
 Run angleoutin pipeline in order for multiple cases:
-  1_extract_xyz.py -> 3_gen_gradient.py -> 5_allen_4points.py -> 7_allen_roi.py
+    1_extract_xyz.py -> 1_multiply_efield.py -> 3_gen_gradient.py -> 7_allen_roi.py
 
-Runs sequentially for: 30V_OUT10_IN20_CI, 30V_OUT10_IN20_DI
+Runs sequentially for:
+    30V_OUT10_IN50, 30V_OUT50_IN50, SQ_OUT10_IN10, SQ_OUT50_IN10
 """
 
 from __future__ import annotations
@@ -15,7 +16,12 @@ import sys
 from pathlib import Path
 
 
-CASE_NAMES = ["30V_OUT10_IN20_CI", "30V_OUT10_IN20_DI"]
+CASE_NAMES = [
+    "30V_OUT10_IN50",
+    "30V_OUT50_IN50",
+    "SQ_OUT10_IN10",
+    "SQ_OUT50_IN10",
+]
 
 
 def run_step(script_path: Path, env: dict[str, str]) -> None:
@@ -28,8 +34,8 @@ def main() -> None:
     script_dir = Path(__file__).resolve().parent
     steps = [
         script_dir / "1_extract_xyz.py",
+        script_dir / "1_multiply_efield.py",
         script_dir / "3_gen_gradient.py",
-        script_dir / "5_allen_4points.py",
         script_dir / "7_allen_roi.py",
     ]
 
@@ -43,7 +49,7 @@ def main() -> None:
     print("Angleoutin sequential pipeline (multi-case)")
     print("=" * 60)
     print(f"Cases: {', '.join(CASE_NAMES)}")
-    print("Order: 1_extract_xyz.py -> 3_gen_gradient.py -> 5_allen_4points.py -> 7_allen_roi.py")
+    print("Order: 1_extract_xyz.py -> 1_multiply_efield.py -> 3_gen_gradient.py -> 7_allen_roi.py")
 
     for case_name in CASE_NAMES:
         print(f"\n{'='*60}")

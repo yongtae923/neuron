@@ -29,6 +29,10 @@ INPUT_EFIELD_PATH = DATA_DIR / "1_E_field_1cycle.npy"
 INPUT_COORDS_PATH = DATA_DIR / "1_E_field_grid_coords.npy"
 OUTPUT_DIR = DATA_DIR / "3_gradient"
 OUTPUT_PATH = DATA_DIR / "3_gradient_1cycle.npy"
+INPUT_EFIELD_2X_PATH = DATA_DIR / "1_E_field_1cycle_2x.npy"
+INPUT_EFIELD_10X_PATH = DATA_DIR / "1_E_field_1cycle_10x.npy"
+OUTPUT_2X_PATH = DATA_DIR / "3_gradient_1cycle_2x.npy"
+OUTPUT_10X_PATH = DATA_DIR / "3_gradient_1cycle_10x.npy"
 
 
 def _build_axis_and_indices(coords: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
@@ -117,18 +121,10 @@ def main() -> None:
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-    # 전체 E 배열을 RAM에 올리지 않도록 메모리 매핑 사용
-    efield = np.load(INPUT_EFIELD_PATH, mmap_mode="r")  # (3, N_spatial, Nt)
     coords = np.load(INPUT_COORDS_PATH)  # (N_spatial, 3)
-
-    if efield.ndim != 3 or efield.shape[0] != 3:
-        raise ValueError(f"Unexpected E-field shape: {efield.shape}, expected (3, N_spatial, Nt)")
-    if coords.shape[0] != efield.shape[1]:
-        raise ValueError(f"Mismatch: coords N={coords.shape[0]} vs E-field spatial N={efield.shape[1]}")
 
     x_axis, y_axis, z_axis, ix, iy, iz = _build_axis_and_indices(coords)
     nx, ny, nz = x_axis.size, y_axis.size, z_axis.size
-    nt = efield.shape[2]
 
     # 데이터 격자/시간이 공통 angleoutin spec과 일치하는지 확인
     axis_tol = 1e-12
@@ -144,9 +140,6 @@ def main() -> None:
         raise ValueError("Y grid step does not match spec.")
     if z_axis.size > 1 and abs(float(np.median(np.diff(z_axis))) - grid_step_m) > axis_tol:
         raise ValueError("Z grid step does not match spec.")
-    if nt != files_per_cycle:
-        raise ValueError(f"Time-step mismatch: nt={nt}, spec per_cycle={files_per_cycle}")
-
     # 3D 코일 마스크: True는 코일 내부(gradient를 0 처리)
     # spec의 오각기둥 사용: y 범위 + xz 오각형(단위 m)
     pentagon = MplPath(coil_polygon_xz_m)
@@ -163,51 +156,69 @@ def main() -> None:
     print(f"Coil interior: {n_coil} points masked to 0")
     print(f"Coil surface shell (outside, 1-voxel): {n_shell} points masked to 0")
 
-    print(f"E-field shape: {efield.shape}")
-    print(f"Grid shape: Nx={nx}, Ny={ny}, Nz={nz}, Nt={nt}")
-    print("Computing: dEx/dx, dEy/dy, dEz/dz (edge_order=2)")
+    jobs = [
+        ("1x", INPUT_EFIELD_PATH, OUTPUT_PATH),
+        ("2x", INPUT_EFIELD_2X_PATH, OUTPUT_2X_PATH),
+        ("10x", INPUT_EFIELD_10X_PATH, OUTPUT_10X_PATH),
+    ]
 
-    # 단일 출력 파일 생성
-    # axis-0 의미:
-    #   0 -> dEx/dx
-    #   1 -> dEy/dy
-    #   2 -> dEz/dz
-    grad_out = np.lib.format.open_memmap(
-        OUTPUT_PATH,
-        mode="w+",
-        dtype=np.float32,
-        shape=(3, nx, ny, nz, nt),
-    )
+    if all(out_path.exists() for _, _, out_path in jobs):
+        print("All output gradient files already exist. Nothing to do.")
+        return
 
-    # 성능 및 메모리 피크 감소를 위해 버퍼 재사용
-    ex_grid = np.empty((nx, ny, nz), dtype=np.float32)
-    ey_grid = np.empty((nx, ny, nz), dtype=np.float32)
-    ez_grid = np.empty((nx, ny, nz), dtype=np.float32)
+    for tag, efield_path, out_path in jobs:
+        if out_path.exists():
+            print(f"Skip {tag}: output already exists ({out_path})")
+            continue
 
-    for t in range(nt):
-        # 평면화된 공간값을 3D 격자에 배치
-        ex_grid[ix, iy, iz] = efield[0, :, t]
-        ey_grid[ix, iy, iz] = efield[1, :, t]
-        ez_grid[ix, iy, iz] = efield[2, :, t]
+        if not efield_path.exists():
+            if tag == "1x":
+                raise FileNotFoundError(f"Missing input file: {efield_path}")
+            print(f"Skip {tag}: missing input file ({efield_path})")
+            continue
 
-        # 방향 미분만 계산(요청 사항)
-        grad_out[0, :, :, :, t] = np.gradient(ex_grid, x_axis, axis=0, edge_order=2).astype(np.float32, copy=False)
-        grad_out[1, :, :, :, t] = np.gradient(ey_grid, y_axis, axis=1, edge_order=2).astype(np.float32, copy=False)
-        grad_out[2, :, :, :, t] = np.gradient(ez_grid, z_axis, axis=2, edge_order=2).astype(np.float32, copy=False)
+        efield = np.load(efield_path, mmap_mode="r")  # (3, N_spatial, Nt)
+        if efield.ndim != 3 or efield.shape[0] != 3:
+            raise ValueError(f"Unexpected E-field shape ({tag}): {efield.shape}, expected (3, N_spatial, Nt)")
+        if coords.shape[0] != efield.shape[1]:
+            raise ValueError(f"Mismatch ({tag}): coords N={coords.shape[0]} vs E-field spatial N={efield.shape[1]}")
 
-        # 코일 경계 근처 불연속 스파이크 억제
-        # - 내부: coil_mask
-        # - 바로 바깥 shell: shell_mask
-        for c in range(3):
-            grad_out[c, :, :, :, t][suppress_mask] = 0.0
+        nt = efield.shape[2]
+        if nt != files_per_cycle:
+            raise ValueError(f"Time-step mismatch ({tag}): nt={nt}, spec per_cycle={files_per_cycle}")
 
-        if (t + 1) % 10 == 0 or (t + 1) == nt:
-            print(f"Processed time step: {t + 1}/{nt}")
+        print(f"\n[{tag}] E-field shape: {efield.shape}")
+        print(f"[{tag}] Grid shape: Nx={nx}, Ny={ny}, Nz={nz}, Nt={nt}")
+        print(f"[{tag}] Computing: dEx/dx, dEy/dy, dEz/dz (edge_order=2)")
 
-    # 메모리 매핑 출력 flush
-    del grad_out
+        grad_out = np.lib.format.open_memmap(
+            out_path,
+            mode="w+",
+            dtype=np.float32,
+            shape=(3, nx, ny, nz, nt),
+        )
 
-    print(f"Saved: {OUTPUT_PATH}")
+        ex_grid = np.empty((nx, ny, nz), dtype=np.float32)
+        ey_grid = np.empty((nx, ny, nz), dtype=np.float32)
+        ez_grid = np.empty((nx, ny, nz), dtype=np.float32)
+
+        for t in range(nt):
+            ex_grid[ix, iy, iz] = efield[0, :, t]
+            ey_grid[ix, iy, iz] = efield[1, :, t]
+            ez_grid[ix, iy, iz] = efield[2, :, t]
+
+            grad_out[0, :, :, :, t] = np.gradient(ex_grid, x_axis, axis=0, edge_order=2).astype(np.float32, copy=False)
+            grad_out[1, :, :, :, t] = np.gradient(ey_grid, y_axis, axis=1, edge_order=2).astype(np.float32, copy=False)
+            grad_out[2, :, :, :, t] = np.gradient(ez_grid, z_axis, axis=2, edge_order=2).astype(np.float32, copy=False)
+
+            for c in range(3):
+                grad_out[c, :, :, :, t][suppress_mask] = 0.0
+
+            if (t + 1) % 10 == 0 or (t + 1) == nt:
+                print(f"[{tag}] Processed time step: {t + 1}/{nt}")
+
+        del grad_out
+        print(f"[{tag}] Saved: {out_path}")
 
 
 if __name__ == "__main__":

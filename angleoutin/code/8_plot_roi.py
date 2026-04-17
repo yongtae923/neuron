@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import math
+import os
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
@@ -37,7 +38,8 @@ def _gain_tag(v: float) -> str:
 
 def _find_inputs_v2(script_dir: Path, cell_id: str | None = None) -> List[Path]:
     """Find v2 summary files sorted by modified time (newest first)."""
-    outdir = script_dir.parent / "data" / "30V_OUT10_IN20_CI" / "7_gradient_allen"
+    case_name = os.environ.get("ANGLEOUTIN_CASE", "30V_OUT10_IN20_CI")
+    outdir = script_dir.parent / "data" / case_name / "7_gradient_allen"
     if not outdir.is_dir():
         return []
 

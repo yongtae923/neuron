@@ -119,8 +119,8 @@ TSTOP_REL_MS = 4.0
 VM_TRACE_T0_MS = 0.0
 VM_TRACE_T1_MS = 1.0
 
-# 1x only
-DEFAULT_GRAD_GAINS = (1.0,)
+# Default gains
+DEFAULT_GRAD_GAINS = (1.0, 2.0, 10.0)
 
 # ROI filter in um
 ROI_BOUNDS_UM = {
@@ -908,7 +908,7 @@ def main() -> None:
         "--gains",
         type=str,
         default=None,
-        help="Comma-separated gradient gains (ignored in v2; 1x only).",
+        help="Comma-separated gradient gains (default: 1,2,10).",
     )
     ap.add_argument("--keep_tmp", action="store_true", help="Keep temp worker files.")
     ap.add_argument(
@@ -951,9 +951,15 @@ def main() -> None:
     print(f"Gradient window: {GRAD_ON_T0_MS:.3f} to {GRAD_ON_T1_MS:.3f} ms", flush=True)
     print(f"Sim window: 0 to {TSTOP_REL_MS:.3f} ms", flush=True)
 
-    gains = [1.0]
+    gains = [float(v) for v in DEFAULT_GRAD_GAINS]
     if args.gains is not None and str(args.gains).strip() != "":
-        print("[INFO] --gains is ignored in v2. Running 1x only.", flush=True)
+        vals: List[float] = []
+        for tok in str(args.gains).split(","):
+            tok = tok.strip()
+            if tok:
+                vals.append(float(tok))
+        if vals:
+            gains = vals
 
     print(f"Gradient gains: {', '.join(f'{g:g}x' for g in gains)}", flush=True)
     print(

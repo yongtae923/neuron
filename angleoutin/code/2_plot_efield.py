@@ -20,7 +20,8 @@ import json
 # --- 1. 데이터 로드 (메모리 매핑) ---
 import os
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-DATA_DIR = os.path.join(os.path.dirname(SCRIPT_DIR), "data", "30V_OUT10_IN20_CI")
+CASE_NAME = os.environ.get("ANGLEOUTIN_CASE", "30V_OUT10_IN20_CI")
+DATA_DIR = os.path.join(os.path.dirname(SCRIPT_DIR), "data", CASE_NAME)
 SPEC_PATH = os.path.join(DATA_DIR, "0_grid_time_spec.json")
 E_path = os.path.join(DATA_DIR, "1_E_field_1cycle.npy")
 C_path = os.path.join(DATA_DIR, "1_E_field_grid_coords.npy")

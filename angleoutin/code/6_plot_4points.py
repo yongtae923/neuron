@@ -20,7 +20,8 @@ from typing import List
 import numpy as np
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-DATA_DIR = os.path.join(os.path.dirname(SCRIPT_DIR), "data", "30V_OUT10_IN20_CI")
+CASE_NAME = os.environ.get("ANGLEOUTIN_CASE", "30V_OUT10_IN20_CI")
+DATA_DIR = os.path.join(os.path.dirname(SCRIPT_DIR), "data", CASE_NAME)
 CELL_ID = "529898751"
 OUTPUT_DIR = os.path.join(DATA_DIR, "5_gradient_output")
 PLOT_DIR = os.path.join(DATA_DIR, "6_gradient_plot")

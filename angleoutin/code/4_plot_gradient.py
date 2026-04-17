@@ -5,7 +5,7 @@
 - Gradient(dEx/dx, dEy/dy, dEz/dz, |grad|)를 XY/YZ/ZX 슬라이스로 인터랙티브 시각화합니다.
 
 입출력:
-- 입력: data/30V_OUT10_IN20_CI/3_gradient_1cycle.npy, 1_E_field_grid_coords.npy, 0_grid_time_spec.json
+- 입력: data/30V_OUT10_IN20_CI/3_gradient_1cycle.npy, 3_gradient_1cycle_2x.npy, 3_gradient_1cycle_10x.npy, 1_E_field_grid_coords.npy, 0_grid_time_spec.json
 - 출력: 화면 표시(파일 저장 없음)
 
 실행 방법:
@@ -24,23 +24,54 @@ from scipy.ndimage import gaussian_filter
 
 # --- 1. 데이터 로드 (메모리 매핑) ---
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-DATA_DIR = os.path.join(os.path.dirname(SCRIPT_DIR), "data", "30V_OUT10_IN20_CI")
+CASE_NAME = os.environ.get("ANGLEOUTIN_CASE", "30V_OUT10_IN20_CI")
+DATA_DIR = os.path.join(os.path.dirname(SCRIPT_DIR), "data", CASE_NAME)
 SPEC_PATH = os.path.join(DATA_DIR, "0_grid_time_spec.json")
-G_PATH = os.path.join(DATA_DIR, "3_gradient_1cycle.npy")
 C_PATH = os.path.join(DATA_DIR, "1_E_field_grid_coords.npy")
+
+G_PATHS = {
+    "1x": os.path.join(DATA_DIR, "3_gradient_1cycle.npy"),
+    "2x": os.path.join(DATA_DIR, "3_gradient_1cycle_2x.npy"),
+    "10x": os.path.join(DATA_DIR, "3_gradient_1cycle_10x.npy"),
+}
 
 with open(SPEC_PATH, "r", encoding="utf-8") as f:
     spec = json.load(f)
 
-G = np.load(G_PATH, mmap_mode="r")    # shape: (3, nx, ny, nz, T)
+G_MAP: dict[str, np.ndarray] = {}
+for scale_label, path in G_PATHS.items():
+    if os.path.exists(path):
+        G_MAP[scale_label] = np.load(path, mmap_mode="r")
+
+if not G_MAP:
+    raise FileNotFoundError(
+        "No gradient files found. Expected at least one of: "
+        + ", ".join(G_PATHS.values())
+    )
+
+DEFAULT_SCALE = "1x" if "1x" in G_MAP else next(iter(G_MAP.keys()))
+SCALE_OPTIONS = [s for s in ("1x", "2x", "10x") if s in G_MAP]
+
+G0 = G_MAP[DEFAULT_SCALE]
+
+# shape: (3, nx, ny, nz, T)
 coords = np.load(C_PATH)              # shape: (N_spatial, 3)
 
-if not (G.ndim == 5 and G.shape[0] == 3):
+if not (G0.ndim == 5 and G0.shape[0] == 3):
     raise ValueError("Gradient file shape should be (3, Nx, Ny, Nz, T)")
 if not (coords.ndim == 2 and coords.shape[1] == 3):
     raise ValueError("Coords shape should be (N_spatial, 3)")
 
-nx, ny, nz, T = G.shape[1], G.shape[2], G.shape[3], G.shape[4]
+nx, ny, nz, T = G0.shape[1], G0.shape[2], G0.shape[3], G0.shape[4]
+
+for scale_label, garr in G_MAP.items():
+    if not (garr.ndim == 5 and garr.shape[0] == 3):
+        raise ValueError(f"Gradient file shape invalid for {scale_label}: {garr.shape}")
+    if garr.shape != G0.shape:
+        raise ValueError(
+            "All gradient files must share same shape. "
+            f"{scale_label}={garr.shape}, {DEFAULT_SCALE}={G0.shape}"
+        )
 
 # 공통 시간/공간/코일 spec 로드 (um/us)
 X_MIN = float(spec["space_um"]["x"]["min"])
@@ -103,11 +134,12 @@ if T != FILES_PER_CYCLE:
 
 
 # --- 2. 데이터 처리 도우미 ---
-def get_volume_at_t(t: int, mode: str = "mag") -> np.ndarray:
+def get_volume_at_t(t: int, mode: str = "mag", scale: str = DEFAULT_SCALE) -> np.ndarray:
     """
     mode: 'mag' or 'dExdx' or 'dEydy' or 'dEzdz'
     return: volume (nx, ny, nz)
     """
+    G = G_MAP[scale]
     if mode == "dExdx":
         vol = G[0, :, :, :, t]
     elif mode == "dEydy":
@@ -153,13 +185,13 @@ SHELL_MASK_3D = _build_surface_shell_mask(COIL_MASK_3D)
 SUPPRESS_MASK_3D = COIL_MASK_3D | SHELL_MASK_3D
 
 
-def estimate_vmin_vmax(mode: str = "mag") -> tuple[float, float]:
+def estimate_vmin_vmax(mode: str = "mag", scale: str = DEFAULT_SCALE) -> tuple[float, float]:
     """Compute robust color range from 0~0.1 ms, excluding coil and shell."""
     t_indices = [t for t in [0, 1, 2] if t < T]
 
     vals = []
     for t in t_indices:
-        vol = get_volume_at_t(t, mode=mode)
+        vol = get_volume_at_t(t, mode=mode, scale=scale)
         outside = vol[~SUPPRESS_MASK_3D]
         finite = outside[np.isfinite(outside)]
         if finite.size > 0:
@@ -205,7 +237,7 @@ ax_ctrl = fig.add_subplot(gs[0, 3])
 cmap = plt.colormaps["RdBu_r"].copy()
 cmap.set_bad(color="black")
 
-init_vol = get_volume_at_t(0, mode="mag")
+init_vol = get_volume_at_t(0, mode="mag", scale=DEFAULT_SCALE)
 im_xy = ax_xy.imshow(init_vol[:, :, nz // 2].T, origin="lower", aspect="equal", cmap=cmap)
 im_yz = ax_yz.imshow(init_vol[nx // 2, :, :].T, origin="lower", aspect="equal", cmap=cmap)
 im_zx = ax_zx.imshow(init_vol[:, ny // 2, :].T, origin="lower", aspect="equal", cmap=cmap)
@@ -247,7 +279,10 @@ z_sl = Slider(ax_z, "z (um)", zu[0], zu[-1], valinit=-450.0, valstep=GRID_SPACIN
 rax = fig.add_axes([0.75, 0.7, 0.18, 0.17])
 mode_buttons = RadioButtons(rax, ("mag", "dExdx", "dEydy", "dEzdz"), active=0)
 
-cax = fig.add_axes([0.75, 0.5, 0.15, 0.15])
+sax = fig.add_axes([0.75, 0.56, 0.18, 0.12])
+scale_buttons = RadioButtons(sax, SCALE_OPTIONS, active=SCALE_OPTIONS.index(DEFAULT_SCALE))
+
+cax = fig.add_axes([0.75, 0.42, 0.15, 0.12])
 auto_scale_check = CheckButtons(cax, ["Auto scale", "Smoothing"], [False, False])
 
 global_scale_cache: dict[str, tuple[float, float]] = {}
@@ -255,6 +290,7 @@ global_scale_cache: dict[str, tuple[float, float]] = {}
 
 def update_view(_=None) -> None:
     mode = mode_buttons.value_selected
+    scale = scale_buttons.value_selected
 
     t_us = float(t_sl.val)
     t = int(round((t_us - TIME_START_US) / DT_US))
@@ -267,7 +303,7 @@ def update_view(_=None) -> None:
     yi = int(np.argmin(np.abs(yu - y_um)))
     zi = int(np.argmin(np.abs(zu - z_um)))
 
-    vol = get_volume_at_t(t, mode=mode)
+    vol = get_volume_at_t(t, mode=mode, scale=scale)
 
     smoothing_enabled = auto_scale_check.get_status()[1]
     if smoothing_enabled:
@@ -303,9 +339,10 @@ def update_view(_=None) -> None:
         if not np.isfinite(vmin) or not np.isfinite(vmax) or vmax <= vmin:
             vmin, vmax = 0.0, 1.0
     else:
-        if mode not in global_scale_cache:
-            global_scale_cache[mode] = estimate_vmin_vmax(mode=mode)
-        vmin, vmax = global_scale_cache[mode]
+        key = f"{scale}:{mode}"
+        if key not in global_scale_cache:
+            global_scale_cache[key] = estimate_vmin_vmax(mode=mode, scale=scale)
+        vmin, vmax = global_scale_cache[key]
 
     im_xy.set_data(slice_xy.T)
     im_yz.set_data(slice_yz.T)
@@ -334,9 +371,9 @@ def update_view(_=None) -> None:
         "dEydy": "dEy/dy",
         "dEzdz": "dEz/dz",
     }[mode]
-    ax_xy.set_title(f"XY: {mode_label}, z={zu[zi]:.0f}um, t={t_us:.0f}us")
-    ax_yz.set_title(f"YZ: {mode_label}, x={xu[xi]:.0f}um, t={t_us:.0f}us")
-    ax_zx.set_title(f"ZX: {mode_label}, y={yu[yi]:.0f}um, t={t_us:.0f}us")
+    ax_xy.set_title(f"XY: {mode_label} ({scale}), z={zu[zi]:.0f}um, t={t_us:.0f}us")
+    ax_yz.set_title(f"YZ: {mode_label} ({scale}), x={xu[xi]:.0f}um, t={t_us:.0f}us")
+    ax_zx.set_title(f"ZX: {mode_label} ({scale}), y={yu[yi]:.0f}um, t={t_us:.0f}us")
 
     cbar.update_normal(im_xy)
     fig.canvas.draw_idle()
@@ -347,6 +384,7 @@ x_sl.on_changed(update_view)
 y_sl.on_changed(update_view)
 z_sl.on_changed(update_view)
 mode_buttons.on_clicked(update_view)
+scale_buttons.on_clicked(update_view)
 auto_scale_check.on_clicked(update_view)
 
 update_view()
