@@ -5,8 +5,8 @@
 - Ex/Ey/Ez 텍스트 파일에서 E-field와 좌표를 추출하고 검증합니다.
 
 입출력:
-- 입력: data/30V_OUT10_IN20_CI/*_Ex, *_Ey, *_Ez/*.txt
-- 출력: data/30V_OUT10_IN20_CI/1_E_field_1cycle.npy, 1_E_field_grid_coords.npy
+- 입력: data/400us_30V_OUT10_IN20/*_Ex, *_Ey, *_Ez/*.txt
+- 출력: data/400us_30V_OUT10_IN20/1_E_field_1cycle.npy, 1_E_field_grid_coords.npy
 
 실행 방법:
 - python 1_extract_xyz.py
@@ -21,12 +21,14 @@ import os
 import glob
 import json
 from pathlib import Path
+from typing import cast
+from numpy.typing import NDArray
 from tqdm import tqdm
 from multiprocessing import Pool, cpu_count
 
 # --- 1. 경로 및 상수 설정 ---
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-CASE_NAME = os.environ.get("ANGLEOUTIN_CASE", "30V_OUT10_IN20_CI")
+CASE_NAME = os.environ.get("ANGLEOUTIN_CASE", "400us_30V_OUT10_IN20")
 BASE_DIR = os.path.join(os.path.dirname(SCRIPT_DIR), "data", CASE_NAME)
 
 # E-field 폴더 경로 (요청된 data/<CASE_NAME> 디렉토리 내)
@@ -111,7 +113,7 @@ def clear_checkpoint(component_name):
 
 
 # --- 3. 워커 함수 (멀티프로세싱용) ---
-def read_single_file(args):
+def read_single_file(args: tuple[str, int, int]) -> tuple[int, NDArray[np.float32]]:
     """
     단일 파일을 읽어서 E-field 값을 반환합니다.
     멀티프로세싱 워커 함수로 사용됩니다.
@@ -125,7 +127,8 @@ def read_single_file(args):
     file_path, file_index, num_spatial_points = args
     try:
         df = pd.read_csv(file_path, skiprows=2, sep=r'\s+', header=None, engine='python')
-        field_values = df.iloc[:, -1].values.astype(np.float32)
+        # Force a concrete NumPy array for stable static typing and assignment.
+        field_values = np.asarray(df.iloc[:, -1].to_numpy(), dtype=np.float32)
         
         if len(field_values) != num_spatial_points:
             raise ValueError(
@@ -215,25 +218,25 @@ def load_e_field_component(component_dir, total_steps=201, batch_size=20):
         batch_data = np.zeros((num_spatial_points, len(batch_files)), dtype=np.float32)
         
         # 워커 함수에 전달할 인자 준비
-        worker_args = [
+        worker_args: list[tuple[str, int, int]] = [
             (file_path, local_idx, num_spatial_points)
             for local_idx, file_path in enumerate(batch_files)
         ]
         
         # 멀티프로세싱으로 병렬 처리
         with Pool(processes=NUM_WORKERS) as pool:
-            results = list(tqdm(
+            results = cast(list[tuple[int, NDArray[np.float32]]], list(tqdm(
                 pool.imap(read_single_file, worker_args),
                 total=len(batch_files),
                 desc=f"    배치 {batch_idx+1}",
                 unit="file",
                 leave=False,
                 ncols=80
-            ))
+            )))
         
         # 결과를 배치 데이터에 할당
         for file_index, field_values in results:
-            batch_data[:, file_index] = field_values
+            batch_data[:, int(file_index)] = np.asarray(field_values, dtype=np.float32)
         
         # 배치 저장
         np.save(batch_file_path, batch_data)

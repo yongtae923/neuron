@@ -5,8 +5,8 @@
 - E-field에서 방향 미분(dEx/dx, dEy/dy, dEz/dz) gradient를 생성합니다.
 
 입출력:
-- 입력: data/30V_OUT10_IN20_CI/1_E_field_1cycle.npy, 1_E_field_grid_coords.npy, 0_grid_time_spec.json
-- 출력: data/30V_OUT10_IN20_CI/3_gradient_1cycle.npy
+- 입력: data/400us_30V_OUT10_IN20/1_E_field_1cycle.npy, 1_E_field_grid_coords.npy, 0_grid_time_spec.json
+- 출력: data/400us_30V_OUT10_IN20/3_gradient_1cycle.npy
 
 실행 방법:
 - python 3_gen_gradient.py
@@ -22,7 +22,7 @@ from matplotlib.path import Path as MplPath
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-CASE_NAME = os.environ.get("ANGLEOUTIN_CASE", "30V_OUT10_IN20_CI")
+CASE_NAME = os.environ.get("ANGLEOUTIN_CASE", "400us_30V_OUT10_IN20")
 DATA_DIR = SCRIPT_DIR.parent / "data" / CASE_NAME
 SPEC_PATH = DATA_DIR / "0_grid_time_spec.json"
 INPUT_EFIELD_PATH = DATA_DIR / "1_E_field_1cycle.npy"

@@ -8,8 +8,8 @@
 - Allen cell 다중 위치에 대해 gradient-driven extracellular forcing을 계산합니다.
 
 입출력:
-- 입력: data/30V_OUT10_IN20_CI/3_gradient_1cycle.npy, 1_E_field_grid_coords.npy, 0_grid_time_spec.json, 0_allen_4points.json
-- 출력: data/30V_OUT10_IN20_CI/5_gradient_output/*.npy
+- 입력: data/400us_30V_OUT10_IN20/3_gradient_1cycle.npy, 1_E_field_grid_coords.npy, 0_grid_time_spec.json, 0_allen_4points.json
+- 출력: data/400us_30V_OUT10_IN20/5_gradient_output/*.npy
 
 실행 방법:
 - python 5_allen_4points.py
@@ -46,7 +46,7 @@ h.load_file("stdrun.hoc")
 # =========================
 # Config
 # =========================
-CASE_NAME = os.environ.get("ANGLEOUTIN_CASE", "30V_OUT10_IN20_CI")
+CASE_NAME = os.environ.get("ANGLEOUTIN_CASE", "400us_30V_OUT10_IN20")
 CELL_ID = "529898751"
 
 DATA_DIR = os.path.join(os.path.dirname(SCRIPT_DIR), "data", CASE_NAME)

@@ -1,6 +1,8 @@
 # D:\yongtae\neuron\angleoutin\code\7_allen_roi.py
 
 """
+WSL 환경에서 사용합니다.
+
 7_allen_roi.py
 ------------------------------------------------------------
 Angleoutin ROI summary simulation over outside-coil grid points.
@@ -12,10 +14,10 @@ This script uses gradient-driven extracellular forcing:
   dphi_mV    = -gain * g_parallel * ds_um^2 * 1e-9
 
 Input:
-    - angleoutin/data/30V_OUT10_IN20_CI/3_gradient_1cycle.npy
-    - angleoutin/data/30V_OUT10_IN20_CI/1_E_field_grid_coords.npy
-    - angleoutin/data/30V_OUT10_IN20_CI/0_grid_time_spec.json
-    - angleoutin/data/30V_OUT10_IN20_CI/0_roi.json
+    - angleoutin/data/400us_30V_OUT10_IN20/3_gradient_1cycle.npy
+    - angleoutin/data/400us_30V_OUT10_IN20/1_E_field_grid_coords.npy
+    - angleoutin/data/400us_30V_OUT10_IN20/0_grid_time_spec.json
+    - angleoutin/data/400us_30V_OUT10_IN20/0_roi.json
 
 Output (summary only):
   - vm0_mV
@@ -27,7 +29,7 @@ Output (summary only):
     - spike_off_times_ms
   - vm_trace_t_ms
   - vm_trace_0to1ms_mV
-    - saved to angleoutin/data/30V_OUT10_IN20_CI/7_gradient_allen/
+    - saved to angleoutin/data/400us_30V_OUT10_IN20/7_gradient_allen/
 ------------------------------------------------------------
 """
 
@@ -76,7 +78,7 @@ else:
 # Config (default)
 # =========================
 
-CASE_NAME = os.environ.get("ANGLEOUTIN_CASE", "30V_OUT10_IN20_CI")
+CASE_NAME = os.environ.get("ANGLEOUTIN_CASE", "400us_30V_OUT10_IN20")
 
 CELL_IDS = (
     "529898751",

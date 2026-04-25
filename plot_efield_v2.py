@@ -15,12 +15,33 @@ Windows + Conda:
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.widgets import Slider, RadioButtons, CheckButtons
+from pathlib import Path
 
 # =========================
 # 1) Load data (memory-mapped)
 # =========================
-E_path = "efield/old_2025/E_field_1cycle.npy"
-C_path = "efield/old_2025/E_field_grid_coords.npy"
+SCRIPT_DIR = Path(__file__).resolve().parent
+
+
+def _resolve_data_paths() -> tuple[Path, Path]:
+    # Prefer legacy old_2025 dataset, then fallback to current efield root.
+    candidate_dirs = [
+        SCRIPT_DIR / "efield" / "twin_400us_50Hz_10umspaing_100mA",
+        # SCRIPT_DIR / "efield",
+    ]
+    for d in candidate_dirs:
+        e_path = d / "E_field_1cycle.npy"
+        c_path = d / "E_field_grid_coords.npy"
+        if e_path.is_file() and c_path.is_file():
+            return e_path, c_path
+    searched = "\n".join(str(d) for d in candidate_dirs)
+    raise FileNotFoundError(
+        "E-field npy files not found. Checked directories:\n"
+        f"{searched}"
+    )
+
+
+E_path, C_path = _resolve_data_paths()
 
 E = np.load(E_path, mmap_mode="r")          # shape: (3, N_spatial, T)
 coords = np.load(C_path)                    # shape: (N_spatial, 3)
@@ -225,11 +246,11 @@ y_sl = Slider(ax_y, 'y (μm)', yu[0], yu[-1], valinit=35.0, valstep=GRID_SPACING
 z_sl = Slider(ax_z, 'z (μm)', zu[0], zu[-1], valinit=550.0, valstep=GRID_SPACING_UM)
 
 # Radio buttons for mode selection
-rax = fig.add_axes([0.75, 0.7, 0.15, 0.15])
+rax = fig.add_axes((0.75, 0.7, 0.15, 0.15))
 mode_buttons = RadioButtons(rax, ('mag', 'Ex', 'Ey', 'Ez'), active=0)
 
 # Checkbox for auto scale
-cax = fig.add_axes([0.75, 0.5, 0.15, 0.1])
+cax = fig.add_axes((0.75, 0.5, 0.15, 0.1))
 auto_scale_check = CheckButtons(cax, ['Auto scale'], [False])
 
 # Cache global vmin/vmax per mode

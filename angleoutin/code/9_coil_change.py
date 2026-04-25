@@ -1,6 +1,8 @@
 # D:\yongtae\neuron\angleoutin\code\9_coil_change.py
 
 """
+WSL 환경에서 사용합니다.
+
 Run angleoutin pipeline in order for multiple cases:
     1_extract_xyz.py -> 1_multiply_efield.py -> 3_gen_gradient.py -> 7_allen_roi.py
 
@@ -17,10 +19,8 @@ from pathlib import Path
 
 
 CASE_NAMES = [
-    "30V_OUT10_IN50",
-    "30V_OUT50_IN50",
-    "SQ_OUT10_IN10",
-    "SQ_OUT50_IN10",
+    "SQ_OUT50_IN50",
+    "30V_OUT10_IN20_DI"
 ]
 
 

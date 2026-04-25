@@ -5,7 +5,7 @@
 - Gradient(dEx/dx, dEy/dy, dEz/dz, |grad|)를 XY/YZ/ZX 슬라이스로 인터랙티브 시각화합니다.
 
 입출력:
-- 입력: data/30V_OUT10_IN20_CI/3_gradient_1cycle.npy, 3_gradient_1cycle_2x.npy, 3_gradient_1cycle_10x.npy, 1_E_field_grid_coords.npy, 0_grid_time_spec.json
+- 입력: data/400us_30V_OUT10_IN20/3_gradient_1cycle.npy, 3_gradient_1cycle_2x.npy, 3_gradient_1cycle_10x.npy, 1_E_field_grid_coords.npy, 0_grid_time_spec.json
 - 출력: 화면 표시(파일 저장 없음)
 
 실행 방법:
@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import os
+import argparse
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.widgets import Slider, RadioButtons, CheckButtons
@@ -24,7 +25,16 @@ from scipy.ndimage import gaussian_filter
 
 # --- 1. 데이터 로드 (메모리 매핑) ---
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-CASE_NAME = os.environ.get("ANGLEOUTIN_CASE", "30V_OUT10_IN20_CI")
+parser = argparse.ArgumentParser(description="Plot gradient slices for a selected case.")
+parser.add_argument(
+    "--case",
+    type=str,
+    default=None,
+    help="Case name under angleoutin/data (e.g. 400us_30V_OUT10_IN20).",
+)
+args = parser.parse_args()
+
+CASE_NAME = args.case or os.environ.get("ANGLEOUTIN_CASE", "400us_30V_OUT10_IN20")
 DATA_DIR = os.path.join(os.path.dirname(SCRIPT_DIR), "data", CASE_NAME)
 SPEC_PATH = os.path.join(DATA_DIR, "0_grid_time_spec.json")
 C_PATH = os.path.join(DATA_DIR, "1_E_field_grid_coords.npy")
@@ -35,6 +45,16 @@ G_PATHS = {
     "10x": os.path.join(DATA_DIR, "3_gradient_1cycle_10x.npy"),
 }
 
+if not os.path.isdir(DATA_DIR):
+    print(f"[ERROR] Case directory not found: {DATA_DIR}")
+    raise SystemExit(1)
+if not os.path.exists(SPEC_PATH):
+    print(f"[ERROR] Missing file: {SPEC_PATH}")
+    raise SystemExit(1)
+if not os.path.exists(C_PATH):
+    print(f"[ERROR] Missing file: {C_PATH}")
+    raise SystemExit(1)
+
 with open(SPEC_PATH, "r", encoding="utf-8") as f:
     spec = json.load(f)
 
@@ -44,10 +64,11 @@ for scale_label, path in G_PATHS.items():
         G_MAP[scale_label] = np.load(path, mmap_mode="r")
 
 if not G_MAP:
-    raise FileNotFoundError(
-        "No gradient files found. Expected at least one of: "
-        + ", ".join(G_PATHS.values())
-    )
+    print("[ERROR] No gradient files found for this case.")
+    print("[INFO] Expected at least one of:")
+    for p in G_PATHS.values():
+        print(f"  - {p}")
+    raise SystemExit(1)
 
 DEFAULT_SCALE = "1x" if "1x" in G_MAP else next(iter(G_MAP.keys()))
 SCALE_OPTIONS = [s for s in ("1x", "2x", "10x") if s in G_MAP]

@@ -5,7 +5,7 @@
 - E-field(Ex/Ey/Ez/|E|)를 XY/YZ/ZX 슬라이스로 인터랙티브 시각화합니다.
 
 입출력:
-- 입력: data/30V_OUT10_IN20_CI/1_E_field_1cycle.npy, 1_E_field_grid_coords.npy, 0_grid_time_spec.json
+- 입력: data/400us_30V_OUT10_IN20/1_E_field_1cycle.npy, 1_E_field_grid_coords.npy, 0_grid_time_spec.json
 - 출력: 화면 표시(파일 저장 없음)
 
 실행 방법:
@@ -16,15 +16,38 @@ import matplotlib.pyplot as plt
 from matplotlib.widgets import Slider, RadioButtons, CheckButtons
 from matplotlib.path import Path
 import json
+import argparse
 
 # --- 1. 데이터 로드 (메모리 매핑) ---
 import os
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-CASE_NAME = os.environ.get("ANGLEOUTIN_CASE", "30V_OUT10_IN20_CI")
+parser = argparse.ArgumentParser(description="Plot E-field slices for a selected case.")
+parser.add_argument(
+    "--case",
+    type=str,
+    default=None,
+    help="Case name under angleoutin/data (e.g. 400us_30V_OUT10_IN20).",
+)
+args = parser.parse_args()
+
+CASE_NAME = args.case or os.environ.get("ANGLEOUTIN_CASE", "400us_30V_OUT10_IN20")
 DATA_DIR = os.path.join(os.path.dirname(SCRIPT_DIR), "data", CASE_NAME)
 SPEC_PATH = os.path.join(DATA_DIR, "0_grid_time_spec.json")
 E_path = os.path.join(DATA_DIR, "1_E_field_1cycle.npy")
 C_path = os.path.join(DATA_DIR, "1_E_field_grid_coords.npy")
+
+if not os.path.isdir(DATA_DIR):
+    print(f"[ERROR] Case directory not found: {DATA_DIR}")
+    raise SystemExit(1)
+if not os.path.exists(SPEC_PATH):
+    print(f"[ERROR] Missing file: {SPEC_PATH}")
+    raise SystemExit(1)
+if not os.path.exists(E_path):
+    print(f"[ERROR] Missing file: {E_path}")
+    raise SystemExit(1)
+if not os.path.exists(C_path):
+    print(f"[ERROR] Missing file: {C_path}")
+    raise SystemExit(1)
 
 with open(SPEC_PATH, "r", encoding="utf-8") as f:
     spec = json.load(f)
@@ -267,11 +290,11 @@ y_sl = Slider(ax_y, 'y (μm)', yu[0], yu[-1], valinit=0.0, valstep=GRID_SPACING_
 z_sl = Slider(ax_z, 'z (μm)', zu[0], zu[-1], valinit=-450.0, valstep=GRID_SPACING_UM)
 
 # 모드 선택 라디오 버튼
-rax = fig.add_axes([0.75, 0.7, 0.15, 0.15])
+rax = fig.add_axes((0.75, 0.7, 0.15, 0.15))
 mode_buttons = RadioButtons(rax, ('mag', 'Ex', 'Ey', 'Ez'), active=0)
 
 # 자동 스케일 체크박스
-cax = fig.add_axes([0.75, 0.5, 0.15, 0.1])
+cax = fig.add_axes((0.75, 0.5, 0.15, 0.1))
 auto_scale_check = CheckButtons(cax, ['Auto scale'], [False])
 
 # 모드별 전역 vmin/vmax 캐시

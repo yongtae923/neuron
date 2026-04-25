@@ -5,8 +5,8 @@
 - 5_allen_4points.py 결과를 불러와 soma 막전위(V_m) 그래프를 저장합니다.
 
 입출력:
-- 입력: data/30V_OUT10_IN20_CI/5_gradient_output/gradient_sanity_1x_cell529898751.npy
-- 출력: data/30V_OUT10_IN20_CI/6_gradient_plot/*.png
+- 입력: data/400us_30V_OUT10_IN20/5_gradient_output/gradient_sanity_1x_cell529898751.npy
+- 출력: data/400us_30V_OUT10_IN20/6_gradient_plot/*.png
 
 실행 방법:
 - python 6_plot_4points.py
@@ -20,7 +20,7 @@ from typing import List
 import numpy as np
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-CASE_NAME = os.environ.get("ANGLEOUTIN_CASE", "30V_OUT10_IN20_CI")
+CASE_NAME = os.environ.get("ANGLEOUTIN_CASE", "400us_30V_OUT10_IN20")
 DATA_DIR = os.path.join(os.path.dirname(SCRIPT_DIR), "data", CASE_NAME)
 CELL_ID = "529898751"
 OUTPUT_DIR = os.path.join(DATA_DIR, "5_gradient_output")
